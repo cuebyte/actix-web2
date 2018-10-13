@@ -17,21 +17,20 @@ pub mod handler;
 mod param;
 pub mod pattern;
 mod request;
-mod response;
+mod responder;
 mod route;
-mod with;
 
 // re-export for convinience
 pub use actix_http::{Error, Response};
 
 pub use app::{App, AppService, State};
 pub use extractor::{Form, Json, Path, Query};
-pub use handler::{FromRequest, Responder};
+pub use handler::FromRequest;
 pub use request::Request;
+pub use responder::{Either, Responder};
 pub use route::Route;
 
 pub mod dev {
-    pub use handler::AsyncResult;
+    pub use handler::{Extract, Factory, Handle};
     pub use param::Params;
-    pub use with::WithFactory;
 }

@@ -1,24 +1,13 @@
-use futures::future::{err, ok, Either as EitherFuture, Future, FutureResult};
-use futures::{Async, Poll};
+use std::marker::PhantomData;
+use std::rc::Rc;
 
-use actix_http::http::StatusCode;
 use actix_http::{Error, Response};
+use actix_net::service::{NewService, Service};
+use futures::future::{ok, FutureResult};
+use futures::{Async, Future, Poll};
 
-use super::request::Request;
-
-/// Trait implemented by types that generate responses for clients.
-///
-/// Types that implement this trait can be used as the return type of a handler.
-pub trait Responder<S = ()> {
-    /// The associated error which can be returned.
-    type Error: Into<Error>;
-
-    /// The future response value.
-    type Future: Future<Item = Response, Error = Self::Error>;
-
-    /// Convert itself to `AsyncResult` or `Error`.
-    fn respond_to(self, req: Request<S>) -> Self::Future;
-}
+use request::Request;
+use responder::{Responder, ResponseFuture};
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -27,349 +16,243 @@ pub trait FromRequest<S>: Sized {
     /// Configuration for conversion process
     type Config: Default;
 
+    /// The associated error which can be returned.
+    type Error: Into<Error>;
+
     /// Future that resolves to a Self
-    type Result: Into<AsyncResult<Self>>;
+    type Future: Future<Item = Self, Error = Self::Error>;
 
     /// Convert request to a Self
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result;
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future;
 
     /// Convert request to a Self
     ///
     /// This method uses default extractor configuration
-    fn extract(req: &Request<S>) -> Self::Result {
+    fn extract(req: &Request<S>) -> Self::Future {
         Self::from_request(req, &Self::Config::default())
     }
 }
 
-/// Combines two different responder types into a single type
-///
-/// ```rust,ignore
-/// # extern crate actix_web;
-/// # extern crate futures;
-/// # use futures::future::Future;
-/// use actix_web::{AsyncResponder, Either, Error, Request, Response};
-/// use futures::future::result;
-///
-/// type RegisterResult =
-///     Either<Response, Box<Future<Item = Response, Error = Error>>>;
-///
-/// fn index(req: Request) -> RegisterResult {
-///     if is_a_variant() {
-///         // <- choose variant A
-///         Either::A(Response::BadRequest().body("Bad data"))
-///     } else {
-///         Either::B(
-///             // <- variant B
-///             result(Ok(Response::Ok()
-///                 .content_type("text/html")
-///                 .body("Hello!")))
-///                 .responder(),
-///         )
-///     }
-/// }
-/// # fn is_a_variant() -> bool { true }
-/// # fn main() {}
-/// ```
-pub enum Either<A, B> {
-    /// First branch of the type
-    A(A),
-    /// Second branch of the type
-    B(B),
+/// Handler converter factory
+pub trait Factory<S, T, R>: Clone + 'static
+where
+    R: Responder<S>,
+{
+    fn call(&self, param: T) -> R;
 }
 
-impl<A, B, S> Responder<S> for Either<A, B>
+impl<S, F, R> Factory<S, (), R> for F
 where
-    A: Responder<S>,
-    B: Responder<S>,
+    F: Fn() -> R + Clone + 'static,
+    R: Responder<S> + 'static,
 {
+    fn call(&self, _: ()) -> R {
+        (self)()
+    }
+}
+
+#[doc(hidden)]
+pub struct Handle<S, F, T, R>
+where
+    F: Factory<S, T, R>,
+    R: Responder<S> + 'static,
+{
+    hnd: F,
+    _t: PhantomData<(S, T, R)>,
+}
+
+impl<S, F, T, R> Handle<S, F, T, R>
+where
+    F: Factory<S, T, R>,
+    R: Responder<S> + 'static,
+{
+    pub fn new(hnd: F) -> Self {
+        Handle {
+            hnd,
+            _t: PhantomData,
+        }
+    }
+}
+impl<S, F, T, R> NewService for Handle<S, F, T, R>
+where
+    F: Factory<S, T, R>,
+    R: Responder<S> + 'static,
+{
+    type Request = (T, Request<S>);
+    type Response = Response;
     type Error = Error;
-    type Future = EitherResponder<A::Future, B::Future>;
+    type InitError = ();
+    type Service = HandleService<S, F, T, R>;
+    type Future = FutureResult<Self::Service, ()>;
 
-    fn respond_to(self, req: Request<S>) -> Self::Future {
-        match self {
-            Either::A(a) => EitherResponder::A(a.respond_to(req)),
-            Either::B(b) => EitherResponder::B(b.respond_to(req)),
-        }
+    fn new_service(&self) -> Self::Future {
+        ok(HandleService {
+            hnd: self.hnd.clone(),
+            _t: PhantomData,
+        })
     }
 }
 
-pub enum EitherResponder<A, B>
+#[doc(hidden)]
+pub struct HandleService<S, F, T, R>
 where
-    A: Future<Item = Response>,
-    A::Error: Into<Error>,
-    B: Future<Item = Response>,
-    B::Error: Into<Error>,
+    F: Factory<S, T, R>,
+    R: Responder<S> + 'static,
 {
-    A(A),
-    B(B),
+    hnd: F,
+    _t: PhantomData<(S, T, R)>,
 }
 
-impl<A, B> Future for EitherResponder<A, B>
+impl<S, F, T, R> Service for HandleService<S, F, T, R>
 where
-    A: Future<Item = Response>,
-    A::Error: Into<Error>,
-    B: Future<Item = Response>,
-    B::Error: Into<Error>,
+    F: Factory<S, T, R>,
+    R: Responder<S> + 'static,
 {
-    type Item = Response;
+    type Request = (T, Request<S>);
+    type Response = Response;
     type Error = Error;
+    type Future = ResponseFuture<R::Future>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self {
-            EitherResponder::A(ref mut fut) => Ok(fut.poll().map_err(|e| e.into())?),
-            EitherResponder::B(ref mut fut) => Ok(fut.poll().map_err(|e| e.into())?),
-        }
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+
+    fn call(&mut self, (param, req): Self::Request) -> Self::Future {
+        ResponseFuture::new(self.hnd.call(param).respond_to(req))
     }
 }
 
-impl<T, S> Responder<S> for Option<T>
+pub struct Extract<T, S>
 where
-    T: Responder<S>,
+    T: FromRequest<S>,
 {
-    type Error = T::Error;
-    type Future = EitherFuture<T::Future, FutureResult<Response, T::Error>>;
-
-    fn respond_to(self, req: Request<S>) -> Self::Future {
-        match self {
-            Some(t) => EitherFuture::A(t.respond_to(req)),
-            None => EitherFuture::B(ok(Response::build(StatusCode::NOT_FOUND)
-                .finish()
-                .into())),
-        }
-    }
+    cfg: Rc<T::Config>,
 }
 
-/// Convenience trait that converts `Future` object to a `Boxed` future
-///
-/// For example loading json from request's body is async operation.
-///
-/// ```rust
-/// # extern crate actix_web;
-/// # extern crate futures;
-/// # #[macro_use] extern crate serde_derive;
-/// use actix_web::{
-///     App, AsyncResponder, Error, Message, Request, Response,
-/// };
-/// use futures::future::Future;
-///
-/// #[derive(Deserialize, Debug)]
-/// struct MyObj {
-///     name: String,
-/// }
-///
-/// fn index(mut req: Request) -> Box<Future<Item = Response, Error = Error>> {
-///     req.json()                   // <- get JsonBody future
-///        .from_err()
-///        .and_then(|val: MyObj| {  // <- deserialized value
-///            Ok(Response::Ok().into())
-///        })
-///     // Construct boxed future by using `AsyncResponder::responder()` method
-///     .responder()
-/// }
-/// # fn main() {}
-/// ```
-pub trait AsyncResponder<I, E>: Sized {
-    /// Convert to a boxed future
-    fn responder(self) -> Box<Future<Item = I, Error = E>>;
-}
-
-impl<F, I, E> AsyncResponder<I, E> for F
+impl<T, S> Extract<T, S>
 where
-    F: Future<Item = I, Error = E> + 'static,
-    I: Responder,
-    E: Into<Error>,
+    T: FromRequest<S> + 'static,
 {
-    fn responder(self) -> Box<Future<Item = I, Error = E>> {
-        Box::new(self)
+    pub fn new(cfg: T::Config) -> Extract<T, S> {
+        Extract { cfg: Rc::new(cfg) }
     }
 }
-
-/// Represents async result
-///
-/// Result could be in tree different forms.
-/// * Ok(T) - ready item
-/// * Err(E) - error happen during reply process
-/// * Future<T, E> - reply process completes in the future
-pub struct AsyncResult<I, E = Error>(Option<AsyncResultItem<I, E>>);
-
-impl<I, E> Future for AsyncResult<I, E> {
-    type Item = I;
-    type Error = E;
-
-    fn poll(&mut self) -> Poll<I, E> {
-        let res = self.0.take().expect("use after resolve");
-        match res {
-            AsyncResultItem::Ok(msg) => Ok(Async::Ready(msg)),
-            AsyncResultItem::Err(err) => Err(err),
-            AsyncResultItem::Future(mut fut) => match fut.poll() {
-                Ok(Async::NotReady) => {
-                    self.0 = Some(AsyncResultItem::Future(fut));
-                    Ok(Async::NotReady)
-                }
-                Ok(Async::Ready(msg)) => Ok(Async::Ready(msg)),
-                Err(err) => Err(err),
-            },
-        }
-    }
-}
-
-pub(crate) enum AsyncResultItem<I, E> {
-    Ok(I),
-    Err(E),
-    Future(Box<Future<Item = I, Error = E>>),
-}
-
-impl<I, E> AsyncResult<I, E> {
-    /// Create async response
-    #[inline]
-    pub fn async(fut: Box<Future<Item = I, Error = E>>) -> AsyncResult<I, E> {
-        AsyncResult(Some(AsyncResultItem::Future(fut)))
-    }
-
-    /// Send response
-    #[inline]
-    pub fn ok<R: Into<I>>(ok: R) -> AsyncResult<I, E> {
-        AsyncResult(Some(AsyncResultItem::Ok(ok.into())))
-    }
-
-    /// Send error
-    #[inline]
-    pub fn err<R: Into<E>>(err: R) -> AsyncResult<I, E> {
-        AsyncResult(Some(AsyncResultItem::Err(err.into())))
-    }
-
-    #[inline]
-    pub(crate) fn into(self) -> AsyncResultItem<I, E> {
-        self.0.expect("use after resolve")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn as_msg(&self) -> &I {
-        match self.0.as_ref().unwrap() {
-            &AsyncResultItem::Ok(ref resp) => resp,
-            _ => panic!(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn as_err(&self) -> Option<&E> {
-        match self.0.as_ref().unwrap() {
-            &AsyncResultItem::Err(ref err) => Some(err),
-            _ => None,
-        }
-    }
-}
-
-impl<S> Responder<S> for Response {
+impl<T, S> NewService for Extract<T, S>
+where
+    T: FromRequest<S> + 'static,
+{
+    type Request = Request<S>;
+    type Response = (T, Request<S>);
     type Error = Error;
-    type Future = FutureResult<Response, Error>;
+    type InitError = ();
+    type Service = ExtractService<T, S>;
+    type Future = FutureResult<Self::Service, ()>;
 
-    #[inline]
-    fn respond_to(self, _: Request<S>) -> Self::Future {
-        ok(self)
+    fn new_service(&self) -> Self::Future {
+        ok(ExtractService {
+            cfg: self.cfg.clone(),
+        })
     }
 }
 
-impl<T> From<T> for AsyncResult<T> {
-    #[inline]
-    fn from(resp: T) -> AsyncResult<T> {
-        AsyncResult(Some(AsyncResultItem::Ok(resp)))
-    }
+pub struct ExtractService<T, S>
+where
+    T: FromRequest<S>,
+{
+    cfg: Rc<T::Config>,
 }
 
-impl<S, T: Responder<S>, E: Into<Error>> Responder<S> for Result<T, E> {
+impl<T, S> Service for ExtractService<T, S>
+where
+    T: FromRequest<S> + 'static,
+{
+    type Request = Request<S>;
+    type Response = (T, Request<S>);
     type Error = Error;
-    type Future = EitherFuture<ResponseFuture<T::Future>, FutureResult<Response, Error>>;
+    type Future = ExtractResponse<T, S>;
 
-    fn respond_to(self, req: Request<S>) -> Self::Future {
-        match self {
-            Ok(val) => EitherFuture::A(ResponseFuture::new(val.respond_to(req))),
-            Err(e) => EitherFuture::B(err(e.into())),
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+
+    fn call(&mut self, req: Self::Request) -> Self::Future {
+        ExtractResponse {
+            fut: T::from_request(&req, self.cfg.as_ref()),
+            req: Some(req),
         }
     }
 }
 
-pub struct ResponseFuture<T>(T);
-
-impl<T> ResponseFuture<T> {
-    pub fn new(fut: T) -> Self {
-        ResponseFuture(fut)
-    }
+pub struct ExtractResponse<T, S>
+where
+    T: FromRequest<S> + 'static,
+{
+    req: Option<Request<S>>,
+    fut: T::Future,
 }
 
-impl<T> Future for ResponseFuture<T>
+impl<T, S> Future for ExtractResponse<T, S>
 where
-    T: Future<Item = Response>,
-    T::Error: Into<Error>,
+    T: FromRequest<S> + 'static,
 {
-    type Item = Response;
+    type Item = (T, Request<S>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        Ok(self.0.poll().map_err(|e| e.into())?)
+        let item = try_ready!(self.fut.poll().map_err(|e| e.into()));
+        Ok(Async::Ready((item, self.req.take().unwrap())))
     }
 }
 
-impl<T, E: Into<Error>> From<Result<AsyncResult<T>, E>> for AsyncResult<T> {
-    #[inline]
-    fn from(res: Result<AsyncResult<T>, E>) -> Self {
-        match res {
-            Ok(val) => val,
-            Err(err) => AsyncResult(Some(AsyncResultItem::Err(err.into()))),
+macro_rules! factory_tuple ({$(($n:tt, $T:ident)),+} => {
+    impl<S, $($T,)+ Func, Res> Factory<S, ($($T,)+), Res> for Func
+    where Func: Fn($($T,)+) -> Res + Clone + 'static,
+        $($T: FromRequest<S> + 'static,)+
+          Res: Responder<S> + 'static,
+    {
+        fn call(&self, param: ($($T,)+)) -> Res {
+            (self)($(param.$n,)+)
         }
     }
-}
+});
 
-impl<T, E: Into<Error>> From<Result<T, E>> for AsyncResult<T> {
-    #[inline]
-    fn from(res: Result<T, E>) -> Self {
-        match res {
-            Ok(val) => AsyncResult(Some(AsyncResultItem::Ok(val))),
-            Err(err) => AsyncResult(Some(AsyncResultItem::Err(err.into()))),
-        }
-    }
-}
-
-impl<T, E> From<Result<Box<Future<Item = T, Error = E>>, E>> for AsyncResult<T>
-where
-    T: 'static,
-    E: Into<Error> + 'static,
-{
-    #[inline]
-    fn from(res: Result<Box<Future<Item = T, Error = E>>, E>) -> Self {
-        match res {
-            Ok(fut) => AsyncResult(Some(AsyncResultItem::Future(Box::new(
-                fut.map_err(|e| e.into()),
-            )))),
-            Err(err) => AsyncResult(Some(AsyncResultItem::Err(err.into()))),
-        }
-    }
-}
-
-impl<T> From<Box<Future<Item = T, Error = Error>>> for AsyncResult<T> {
-    #[inline]
-    fn from(fut: Box<Future<Item = T, Error = Error>>) -> AsyncResult<T> {
-        AsyncResult(Some(AsyncResultItem::Future(fut)))
-    }
-}
-
-/// Convenience type alias
-pub type FutureResponse<I, E = Error> = Box<Future<Item = I, Error = E>>;
-
-impl<I, E, S> Responder<S> for Box<Future<Item = I, Error = E>>
-where
-    S: 'static,
-    I: Responder<S> + 'static,
-    E: Into<Error> + 'static,
-{
-    type Error = Error;
-    type Future = Box<Future<Item = Response, Error = Error>>;
-
-    #[inline]
-    fn respond_to(self, req: Request<S>) -> Self::Future {
-        Box::new(
-            self.map_err(|e| e.into())
-                .and_then(move |r| ResponseFuture(r.respond_to(req))),
-        )
-    }
-}
+factory_tuple!((0, A));
+factory_tuple!((0, A), (1, B));
+factory_tuple!((0, A), (1, B), (2, C));
+factory_tuple!((0, A), (1, B), (2, C), (3, D));
+factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E));
+factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F));
+factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G));
+factory_tuple!(
+    (0, A),
+    (1, B),
+    (2, C),
+    (3, D),
+    (4, E),
+    (5, F),
+    (6, G),
+    (7, H)
+);
+factory_tuple!(
+    (0, A),
+    (1, B),
+    (2, C),
+    (3, D),
+    (4, E),
+    (5, F),
+    (6, G),
+    (7, H),
+    (8, I)
+);
+factory_tuple!(
+    (0, A),
+    (1, B),
+    (2, C),
+    (3, D),
+    (4, E),
+    (5, F),
+    (6, G),
+    (7, H),
+    (8, I),
+    (9, J)
+);

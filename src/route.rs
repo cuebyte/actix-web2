@@ -7,11 +7,11 @@ use actix_http::{Error, Request, Response, ResponseError};
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
 
 use super::app::{HttpService, HttpServiceFactory, State};
-use super::handler::{FromRequest, Responder};
+use super::handler::{Extract, Factory, FromRequest, Handle};
 use super::param::Params;
 use super::pattern::ResourcePattern;
 use super::request::Request as WebRequest;
-use super::with::{Extract, Handle, WithFactory};
+use super::responder::Responder;
 
 /// Resource route definition
 ///
@@ -220,7 +220,7 @@ impl<S> RoutePatternBuilder<S> {
         S,
     >
     where
-        F: WithFactory<S, P, R> + 'static,
+        F: Factory<S, P, R> + 'static,
         P: FromRequest<S> + 'static,
         R: Responder<S> + 'static,
     {
@@ -292,7 +292,7 @@ where
         S,
     >
     where
-        F: WithFactory<S, P, R> + 'static,
+        F: Factory<S, P, R> + 'static,
         P: FromRequest<S> + 'static,
         R: Responder<S> + 'static,
         T::Error: ResponseError,

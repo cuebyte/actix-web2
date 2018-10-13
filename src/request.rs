@@ -3,8 +3,9 @@ use std::ops::Deref;
 
 use actix_http::dev::Payload;
 use actix_http::http::HeaderMap;
-use actix_http::HttpMessage;
 use actix_http::Request as BaseRequest;
+use actix_http::{Error, HttpMessage};
+use futures::future::{ok, FutureResult};
 
 use app::State;
 use handler::FromRequest;
@@ -90,11 +91,12 @@ impl<S> HttpMessage for Request<S> {
 
 impl<S> FromRequest<S> for Request<S> {
     type Config = ();
-    type Result = Self;
+    type Error = Error;
+    type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Result {
-        req.clone()
+    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
+        ok(req.clone())
     }
 }
 

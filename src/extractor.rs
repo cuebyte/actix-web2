@@ -6,7 +6,7 @@ use std::{fmt, str};
 use bytes::Bytes;
 use encoding::all::UTF_8;
 use encoding::types::{DecoderTrap, Encoding};
-use futures::future::{err, ok, FutureResult};
+use futures::future::{err, ok, Either, FutureResult};
 use futures::{future, Async, Future, Poll};
 use mime::Mime;
 use serde::de::{self, DeserializeOwned};
@@ -21,8 +21,9 @@ use actix_http::http::StatusCode;
 use actix_http::{HttpMessage, Response};
 
 use de::PathDeserializer;
-use handler::{AsyncResult, FromRequest, Responder};
+use handler::FromRequest;
 use request::Request;
+use responder::Responder;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.
@@ -119,14 +120,16 @@ where
     T: DeserializeOwned,
 {
     type Config = ();
-    type Result = Result<Self, Error>;
+    type Error = Error;
+    type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
         let req = req.clone();
-        de::Deserialize::deserialize(PathDeserializer::new(&req))
-            .map_err(ErrorNotFound)
-            .map(|inner| Path { inner })
+        match de::Deserialize::deserialize(PathDeserializer::new(&req)) {
+            Ok(inner) => ok(Path { inner }),
+            Err(e) => err(ErrorNotFound(e)),
+        }
     }
 }
 
@@ -208,13 +211,14 @@ where
     T: de::DeserializeOwned,
 {
     type Config = ();
-    type Result = Result<Self, Error>;
+    type Error = Error;
+    type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
         serde_urlencoded::from_str::<T>(req.query_string())
-            .map_err(|e| e.into())
-            .map(Query)
+            .map(|val| ok(Query(val)))
+            .unwrap_or_else(|e| err(e.into()))
     }
 }
 
@@ -288,10 +292,11 @@ where
     S: 'static,
 {
     type Config = FormConfig<S>;
-    type Result = Box<Future<Item = Self, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
         let req2 = req.clone();
         let err = Rc::clone(&cfg.ehandler);
         Box::new(
@@ -496,10 +501,11 @@ where
     S: 'static,
 {
     type Config = JsonConfig<S>;
-    type Result = Box<Future<Item = Self, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
         let req2 = req.clone();
         let err = Rc::clone(&cfg.ehandler);
         Box::new(
@@ -598,13 +604,17 @@ impl<S> Default for JsonConfig<S> {
 /// ```
 impl<S: 'static> FromRequest<S> for Bytes {
     type Config = PayloadConfig<S>;
-    type Result = Result<Box<Future<Item = Self, Error = Error>>, Error>;
+    type Error = Error;
+    type Future =
+        Either<Box<Future<Item = Bytes, Error = Error>>, FutureResult<Bytes, Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
-        cfg.check_mimetype(req)?;
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+        if let Err(e) = cfg.check_mimetype(req) {
+            return Either::B(err(e));
+        }
 
-        Ok(Box::new(MessageBody::new(req).limit(cfg.limit).from_err()))
+        Either::A(Box::new(MessageBody::new(req).limit(cfg.limit).from_err()))
     }
 }
 
@@ -637,17 +647,24 @@ impl<S: 'static> FromRequest<S> for Bytes {
 /// ```
 impl<S: 'static> FromRequest<S> for String {
     type Config = PayloadConfig<S>;
-    type Result = Result<Box<Future<Item = String, Error = Error>>, Error>;
+    type Error = Error;
+    type Future =
+        Either<Box<Future<Item = String, Error = Error>>, FutureResult<String, Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
         // check content-type
-        cfg.check_mimetype(req)?;
+        if let Err(e) = cfg.check_mimetype(req) {
+            return Either::B(err(e));
+        }
 
         // check charset
-        let encoding = req.encoding()?;
+        let encoding = match req.encoding() {
+            Ok(enc) => enc,
+            Err(e) => return Either::B(err(e.into())),
+        };
 
-        Ok(Box::new(
+        Either::A(Box::new(
             MessageBody::new(req)
                 .limit(cfg.limit)
                 .from_err()
@@ -716,13 +733,15 @@ impl<S: 'static> FromRequest<S> for String {
 impl<T: 'static, S> FromRequest<S> for Option<T>
 where
     T: FromRequest<S>,
+    T::Future: 'static,
 {
     type Config = T::Config;
-    type Result = Box<Future<Item = Option<T>, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Option<T>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
-        Box::new(T::from_request(req, cfg).into().then(|r| match r {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+        Box::new(T::from_request(req, cfg).then(|r| match r {
             Ok(v) => future::ok(Some(v)),
             Err(_) => future::ok(None),
         }))
@@ -774,16 +793,22 @@ where
 ///     });
 /// }
 /// ```
-impl<T: 'static, S> FromRequest<S> for Result<T, Error>
+impl<T: 'static, S> FromRequest<S> for Result<T, T::Error>
 where
     T: FromRequest<S>,
+    T::Future: 'static,
+    T::Error: 'static,
 {
     type Config = T::Config;
-    type Result = Box<Future<Item = Result<T, Error>, Error = Error>>;
+    type Error = Error;
+    type Future = Box<Future<Item = Result<T, T::Error>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
-        Box::new(T::from_request(req, cfg).into().then(future::ok))
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+        Box::new(T::from_request(req, cfg).then(|res| match res {
+            Ok(v) => ok(Ok(v)),
+            Err(e) => ok(Err(e)),
+        }))
     }
 }
 
@@ -845,20 +870,22 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
     impl<S: 'static, $($T: FromRequest<S> + 'static),+> FromRequest<S> for ($($T,)+)
     {
         type Config = ($($T::Config,)+);
-        type Result = Box<Future<Item = ($($T,)+), Error = Error>>;
+        type Error = Error;
+        type Future = $fut_type<S, $($T),+>;
 
-        fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
-            Box::new($fut_type {
+        fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+            $fut_type {
                 items: <($(Option<$T>,)+)>::default(),
-                futs: ($(Some($T::from_request(req, &cfg.$n).into()),)+),
+                futs: ($($T::from_request(req, &cfg.$n),)+),
                 _t: PhantomData,
-            })
+            }
         }
     }
 
-    struct $fut_type<S, $($T: FromRequest<S>),+> {
+    #[doc(hidden)]
+    pub struct $fut_type<S, $($T: FromRequest<S>),+> {
         items: ($(Option<$T>,)+),
-        futs: ($(Option<AsyncResult<$T>>,)+),
+        futs: ($($T::Future,)+),
         _t: PhantomData<S>,
     }
 
@@ -871,14 +898,13 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
             let mut ready = true;
 
             $(
-                if self.futs.$n.is_some() {
-                    match self.futs.$n.as_mut().unwrap().poll() {
+                if self.items.$n.is_none() {
+                    match self.futs.$n.poll() {
                         Ok(Async::Ready(item)) => {
                             self.items.$n = Some(item);
-                            self.futs.$n.take();
                         }
                         Ok(Async::NotReady) => ready = false,
-                        Err(e) => return Err(e),
+                        Err(e) => return Err(e.into()),
                     }
                 }
             )+
@@ -896,8 +922,12 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
 impl<S> FromRequest<S> for () {
     type Config = ();
-    type Result = Self;
-    fn from_request(_req: &Request<S>, _cfg: &Self::Config) -> Self::Result {}
+    type Error = Error;
+    type Future = FutureResult<(), Error>;
+
+    fn from_request(_req: &Request<S>, _cfg: &Self::Config) -> Self::Future {
+        ok(())
+    }
 }
 
 tuple_from_req!(TupleFromRequest1, (0, A));
