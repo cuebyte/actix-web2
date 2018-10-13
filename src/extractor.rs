@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::{fmt, str};
@@ -112,7 +113,7 @@ impl<T> From<T> for Path<T> {
     }
 }
 
-impl<T> FromRequest for Path<T>
+impl<T, S> FromRequest<S> for Path<T>
 where
     T: DeserializeOwned,
 {
@@ -120,7 +121,7 @@ where
     type Result = Result<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request, _: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Result {
         let req = req.clone();
         de::Deserialize::deserialize(PathDeserializer::new(&req))
             .map_err(ErrorNotFound)
@@ -201,7 +202,7 @@ impl<T> Query<T> {
     }
 }
 
-impl<T> FromRequest for Query<T>
+impl<T, S> FromRequest<S> for Query<T>
 where
     T: de::DeserializeOwned,
 {
@@ -209,7 +210,7 @@ where
     type Result = Result<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request, _: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Result {
         serde_urlencoded::from_str::<T>(req.query_string())
             .map_err(|e| e.into())
             .map(Query)
@@ -280,15 +281,16 @@ impl<T> DerefMut for Form<T> {
     }
 }
 
-impl<T> FromRequest for Form<T>
+impl<T, S> FromRequest<S> for Form<T>
 where
     T: DeserializeOwned + 'static,
+    S: 'static,
 {
-    type Config = FormConfig;
+    type Config = FormConfig<S>;
     type Result = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
         let req2 = req.clone();
         let err = Rc::clone(&cfg.ehandler);
         Box::new(
@@ -341,12 +343,12 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
 ///     );
 /// }
 /// ```
-pub struct FormConfig {
+pub struct FormConfig<S> {
     limit: usize,
-    ehandler: Rc<Fn(UrlencodedError, &Request) -> Error>,
+    ehandler: Rc<Fn(UrlencodedError, &Request<S>) -> Error>,
 }
 
-impl FormConfig {
+impl<S> FormConfig<S> {
     /// Change max size of payload. By default max size is 256Kb
     pub fn limit(&mut self, limit: usize) -> &mut Self {
         self.limit = limit;
@@ -356,14 +358,14 @@ impl FormConfig {
     /// Set custom error handler
     pub fn error_handler<F>(&mut self, f: F) -> &mut Self
     where
-        F: Fn(UrlencodedError, &Request) -> Error + 'static,
+        F: Fn(UrlencodedError, &Request<S>) -> Error + 'static,
     {
         self.ehandler = Rc::new(f);
         self
     }
 }
 
-impl Default for FormConfig {
+impl<S> Default for FormConfig<S> {
     fn default() -> Self {
         FormConfig {
             limit: 262_144,
@@ -471,11 +473,11 @@ where
     }
 }
 
-impl<T: Serialize> Responder for Json<T> {
+impl<T: Serialize, S> Responder<S> for Json<T> {
     type Item = Response;
     type Error = Error;
 
-    fn respond_to(self, _: Request) -> Result<Response, Error> {
+    fn respond_to(self, _: Request<S>) -> Result<Response, Error> {
         let body = serde_json::to_string(&self.0)?;
 
         Ok(Response::build(StatusCode::OK)
@@ -484,15 +486,16 @@ impl<T: Serialize> Responder for Json<T> {
     }
 }
 
-impl<T> FromRequest for Json<T>
+impl<T, S> FromRequest<S> for Json<T>
 where
     T: DeserializeOwned + 'static,
+    S: 'static,
 {
-    type Config = JsonConfig;
+    type Config = JsonConfig<S>;
     type Result = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
         let req2 = req.clone();
         let err = Rc::clone(&cfg.ehandler);
         Box::new(
@@ -534,12 +537,12 @@ where
 ///     });
 /// }
 /// ```
-pub struct JsonConfig {
+pub struct JsonConfig<S> {
     limit: usize,
-    ehandler: Rc<Fn(JsonPayloadError, &Request) -> Error>,
+    ehandler: Rc<Fn(JsonPayloadError, &Request<S>) -> Error>,
 }
 
-impl JsonConfig {
+impl<S> JsonConfig<S> {
     /// Change max size of payload. By default max size is 256Kb
     pub fn limit(&mut self, limit: usize) -> &mut Self {
         self.limit = limit;
@@ -549,14 +552,14 @@ impl JsonConfig {
     /// Set custom error handler
     pub fn error_handler<F>(&mut self, f: F) -> &mut Self
     where
-        F: Fn(JsonPayloadError, &Request) -> Error + 'static,
+        F: Fn(JsonPayloadError, &Request<S>) -> Error + 'static,
     {
         self.ehandler = Rc::new(f);
         self
     }
 }
 
-impl Default for JsonConfig {
+impl<S> Default for JsonConfig<S> {
     fn default() -> Self {
         JsonConfig {
             limit: 262_144,
@@ -589,13 +592,12 @@ impl Default for JsonConfig {
 ///         .resource("/index.html", |r| r.method(http::Method::GET).with(index));
 /// }
 /// ```
-impl FromRequest for Bytes {
-    type Config = PayloadConfig;
+impl<S: 'static> FromRequest<S> for Bytes {
+    type Config = PayloadConfig<S>;
     type Result = Result<Box<Future<Item = Self, Error = Error>>, Error>;
 
     #[inline]
-    fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result {
-        // check content-type
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
         cfg.check_mimetype(req)?;
 
         Ok(Box::new(MessageBody::new(req).limit(cfg.limit).from_err()))
@@ -629,12 +631,12 @@ impl FromRequest for Bytes {
 ///     });
 /// }
 /// ```
-impl FromRequest for String {
-    type Config = PayloadConfig;
+impl<S: 'static> FromRequest<S> for String {
+    type Config = PayloadConfig<S>;
     type Result = Result<Box<Future<Item = String, Error = Error>>, Error>;
 
     #[inline]
-    fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
         // check content-type
         cfg.check_mimetype(req)?;
 
@@ -707,15 +709,15 @@ impl FromRequest for String {
 ///     });
 /// }
 /// ```
-impl<T: 'static> FromRequest for Option<T>
+impl<T: 'static, S> FromRequest<S> for Option<T>
 where
-    T: FromRequest,
+    T: FromRequest<S>,
 {
     type Config = T::Config;
     type Result = Box<Future<Item = Option<T>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
         Box::new(T::from_request(req, cfg).into().then(|r| match r {
             Ok(v) => future::ok(Some(v)),
             Err(_) => future::ok(None),
@@ -768,26 +770,27 @@ where
 ///     });
 /// }
 /// ```
-impl<T: 'static> FromRequest for Result<T, Error>
+impl<T: 'static, S> FromRequest<S> for Result<T, Error>
 where
-    T: FromRequest,
+    T: FromRequest<S>,
 {
     type Config = T::Config;
     type Result = Box<Future<Item = Result<T, Error>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
         Box::new(T::from_request(req, cfg).into().then(future::ok))
     }
 }
 
 /// Payload configuration for request's payload.
-pub struct PayloadConfig {
+pub struct PayloadConfig<S> {
     limit: usize,
     mimetype: Option<Mime>,
+    _t: PhantomData<S>,
 }
 
-impl PayloadConfig {
+impl<S> PayloadConfig<S> {
     /// Change max size of payload. By default max size is 256Kb
     pub fn limit(&mut self, limit: usize) -> &mut Self {
         self.limit = limit;
@@ -801,7 +804,7 @@ impl PayloadConfig {
         self
     }
 
-    fn check_mimetype(&self, req: &Request) -> Result<(), Error> {
+    fn check_mimetype(&self, req: &Request<S>) -> Result<(), Error> {
         // check content-type
         if let Some(ref mt) = self.mimetype {
             match req.mime_type() {
@@ -822,11 +825,12 @@ impl PayloadConfig {
     }
 }
 
-impl Default for PayloadConfig {
+impl<S> Default for PayloadConfig<S> {
     fn default() -> Self {
         PayloadConfig {
             limit: 262_144,
             mimetype: None,
+            _t: PhantomData,
         }
     }
 }
@@ -834,25 +838,27 @@ impl Default for PayloadConfig {
 macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
     /// FromRequest implementation for tuple
-    impl<$($T: FromRequest + 'static),+> FromRequest for ($($T,)+)
+    impl<S: 'static, $($T: FromRequest<S> + 'static),+> FromRequest<S> for ($($T,)+)
     {
         type Config = ($($T::Config,)+);
         type Result = Box<Future<Item = ($($T,)+), Error = Error>>;
 
-        fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result {
+        fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result {
             Box::new($fut_type {
                 items: <($(Option<$T>,)+)>::default(),
                 futs: ($(Some($T::from_request(req, &cfg.$n).into()),)+),
+                _t: PhantomData,
             })
         }
     }
 
-    struct $fut_type<$($T: FromRequest),+> {
+    struct $fut_type<S, $($T: FromRequest<S>),+> {
         items: ($(Option<$T>,)+),
         futs: ($(Option<AsyncResult<$T>>,)+),
+        _t: PhantomData<S>,
     }
 
-    impl<$($T: FromRequest),+> Future for $fut_type<$($T),+>
+    impl<S, $($T: FromRequest<S>),+> Future for $fut_type<S, $($T),+>
     {
         type Item = ($($T,)+);
         type Error = Error;
@@ -884,10 +890,10 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
     }
 });
 
-impl FromRequest for () {
+impl<S> FromRequest<S> for () {
     type Config = ();
     type Result = Self;
-    fn from_request(_req: &Request, _cfg: &Self::Config) -> Self::Result {}
+    fn from_request(_req: &Request<S>, _cfg: &Self::Config) -> Self::Result {}
 }
 
 tuple_from_req!(TupleFromRequest1, (0, A));

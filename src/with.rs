@@ -11,27 +11,27 @@ use handler::{AsyncResultItem, FromRequest, Responder};
 use request::Request;
 
 #[doc(hidden)]
-pub trait WithFactory<T, R>: Clone + 'static
+pub trait WithFactory<S, T, R>: Clone + 'static
 where
-    R: Responder,
+    R: Responder<S>,
 {
     fn call(&self, param: T) -> R;
 }
 
 #[doc(hidden)]
-pub struct Handle<F, T, R>
+pub struct Handle<S, F, T, R>
 where
-    F: WithFactory<T, R>,
-    R: Responder + 'static,
+    F: WithFactory<S, T, R>,
+    R: Responder<S> + 'static,
 {
     hnd: F,
-    _t: PhantomData<(T, R)>,
+    _t: PhantomData<(S, T, R)>,
 }
 
-impl<F, T, R> Handle<F, T, R>
+impl<S, F, T, R> Handle<S, F, T, R>
 where
-    F: WithFactory<T, R>,
-    R: Responder + 'static,
+    F: WithFactory<S, T, R>,
+    R: Responder<S> + 'static,
 {
     pub fn new(hnd: F) -> Self {
         Handle {
@@ -40,16 +40,16 @@ where
         }
     }
 }
-impl<F, T, R> NewService for Handle<F, T, R>
+impl<S, F, T, R> NewService for Handle<S, F, T, R>
 where
-    F: WithFactory<T, R>,
-    R: Responder + 'static,
+    F: WithFactory<S, T, R>,
+    R: Responder<S> + 'static,
 {
-    type Request = (T, Request);
+    type Request = (T, Request<S>);
     type Response = Response;
     type Error = Error;
     type InitError = ();
-    type Service = HandleService<F, T, R>;
+    type Service = HandleService<S, F, T, R>;
     type Future = FutureResult<Self::Service, ()>;
 
     fn new_service(&self) -> Self::Future {
@@ -61,21 +61,21 @@ where
 }
 
 #[doc(hidden)]
-pub struct HandleService<F, T, R>
+pub struct HandleService<S, F, T, R>
 where
-    F: WithFactory<T, R>,
-    R: Responder + 'static,
+    F: WithFactory<S, T, R>,
+    R: Responder<S> + 'static,
 {
     hnd: F,
-    _t: PhantomData<(T, R)>,
+    _t: PhantomData<(S, T, R)>,
 }
 
-impl<F, T, R> Service for HandleService<F, T, R>
+impl<S, F, T, R> Service for HandleService<S, F, T, R>
 where
-    F: WithFactory<T, R>,
-    R: Responder + 'static,
+    F: WithFactory<S, T, R>,
+    R: Responder<S> + 'static,
 {
-    type Request = (T, Request);
+    type Request = (T, Request<S>);
     type Response = Response;
     type Error = Error;
     type Future = Either<
@@ -99,30 +99,30 @@ where
     }
 }
 
-pub struct Extract<T>
+pub struct Extract<T, S>
 where
-    T: FromRequest,
+    T: FromRequest<S>,
 {
     cfg: Rc<T::Config>,
 }
 
-impl<T> Extract<T>
+impl<T, S> Extract<T, S>
 where
-    T: FromRequest + 'static,
+    T: FromRequest<S> + 'static,
 {
-    pub fn new(cfg: T::Config) -> Extract<T> {
+    pub fn new(cfg: T::Config) -> Extract<T, S> {
         Extract { cfg: Rc::new(cfg) }
     }
 }
-impl<T> NewService for Extract<T>
+impl<T, S> NewService for Extract<T, S>
 where
-    T: FromRequest + 'static,
+    T: FromRequest<S> + 'static,
 {
-    type Request = Request;
-    type Response = (T, Request);
+    type Request = Request<S>;
+    type Response = (T, Request<S>);
     type Error = Error;
     type InitError = ();
-    type Service = ExtractService<T>;
+    type Service = ExtractService<T, S>;
     type Future = FutureResult<Self::Service, ()>;
 
     fn new_service(&self) -> Self::Future {
@@ -132,27 +132,27 @@ where
     }
 }
 
-pub struct ExtractService<T>
+pub struct ExtractService<T, S>
 where
-    T: FromRequest,
+    T: FromRequest<S>,
 {
     cfg: Rc<T::Config>,
 }
 
-impl<T> Service for ExtractService<T>
+impl<T, S> Service for ExtractService<T, S>
 where
-    T: FromRequest + 'static,
+    T: FromRequest<S> + 'static,
 {
-    type Request = Request;
-    type Response = (T, Request);
+    type Request = Request<S>;
+    type Response = (T, Request<S>);
     type Error = Error;
-    type Future = Either<FutureResult<(T, Request), Error>, ExtractResponse<T>>;
+    type Future = Either<FutureResult<(T, Request<S>), Error>, ExtractResponse<T, S>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
+    fn call(&mut self, req: Self::Request) -> Self::Future {
         let reply = T::from_request(&req, self.cfg.as_ref()).into();
         match reply.into() {
             AsyncResultItem::Err(e) => Either::A(err(e)),
@@ -165,19 +165,19 @@ where
     }
 }
 
-pub struct ExtractResponse<T>
+pub struct ExtractResponse<T, S>
 where
-    T: FromRequest + 'static,
+    T: FromRequest<S> + 'static,
 {
-    req: Option<Request>,
+    req: Option<Request<S>>,
     fut: Box<Future<Item = T, Error = Error>>,
 }
 
-impl<T> Future for ExtractResponse<T>
+impl<T, S> Future for ExtractResponse<T, S>
 where
-    T: FromRequest + 'static,
+    T: FromRequest<S> + 'static,
 {
-    type Item = (T, Request);
+    type Item = (T, Request<S>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -186,10 +186,10 @@ where
     }
 }
 
-impl<F, R> WithFactory<(), R> for F
+impl<S, F, R> WithFactory<S, (), R> for F
 where
     F: Fn() -> R + Clone + 'static,
-    R: Responder + 'static,
+    R: Responder<S> + 'static,
 {
     fn call(&self, _: ()) -> R {
         (self)()
@@ -197,10 +197,10 @@ where
 }
 
 macro_rules! with_factory_tuple ({$(($n:tt, $T:ident)),+} => {
-    impl<$($T,)+ Func, Res> WithFactory<($($T,)+), Res> for Func
+    impl<S, $($T,)+ Func, Res> WithFactory<S, ($($T,)+), Res> for Func
     where Func: Fn($($T,)+) -> Res + Clone + 'static,
-        $($T: FromRequest + 'static,)+
-          Res: Responder + 'static,
+        $($T: FromRequest<S> + 'static,)+
+          Res: Responder<S> + 'static,
     {
         fn call(&self, param: ($($T,)+)) -> Res {
             (self)($(param.$n,)+)

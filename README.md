@@ -38,9 +38,3 @@ This project is licensed under either of
 * MIT license ([LICENSE-MIT](LICENSE-MIT) or [http://opensource.org/licenses/MIT](http://opensource.org/licenses/MIT))
 
 at your option.
-
-## Code of Conduct
-
-Contribution to the actix-web2 crate is organized under the terms of the
-Contributor Covenant, the maintainer of actix-web2, @fafhrd91, promises to
-intervene to uphold that code of conduct.

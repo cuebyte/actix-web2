@@ -7,15 +7,15 @@ extern crate futures;
 
 use actix_http::h1;
 use actix_net::server::Server;
-use actix_web2::{Request, Route, Router};
+use actix_web2::{App, Request, Route};
 
 fn index(req: Request) -> &'static str {
     println!("REQ: {:?}", req);
-    "Hello world!"
+    "Hello world!\r\n"
 }
 
 fn no_params() -> &'static str {
-    "Hello world!"
+    "Hello world!\r\n"
 }
 
 fn main() {
@@ -26,10 +26,10 @@ fn main() {
     Server::default()
         .bind("test", "127.0.0.1:8080", || {
             h1::H1Service::new(
-                Router::new()
+                App::new()
                     .service(Route::build("/resource1/index.html").finish(index))
                     .service(Route::build("/resource2/index.html").finish(index))
-                    .service(Route::build("/test1.html").finish(|| "Test"))
+                    .service(Route::build("/test1.html").finish(|| "Test\r\n"))
                     .service(Route::build("/").finish(no_params)),
             )
         }).unwrap()

@@ -33,17 +33,17 @@ macro_rules! parse_single_value {
     }
 }
 
-pub struct PathDeserializer<'de> {
-    req: &'de Request,
+pub struct PathDeserializer<'de, S: 'de> {
+    req: &'de Request<S>,
 }
 
-impl<'de> PathDeserializer<'de> {
-    pub fn new(req: &'de Request) -> Self {
+impl<'de, S: 'de> PathDeserializer<'de, S> {
+    pub fn new(req: &'de Request<S>) -> Self {
         PathDeserializer { req }
     }
 }
 
-impl<'de> Deserializer<'de> for PathDeserializer<'de> {
+impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
     type Error = de::value::Error;
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>

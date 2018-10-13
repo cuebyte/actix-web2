@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::rc::Rc;
 
 use actix_http::{Request, Response};
@@ -6,34 +7,75 @@ use actix_net::service::{IntoNewService, NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
-pub trait HttpService: Service + 'static {
+pub trait HttpServiceFactory<S> {
+    type Factory: NewService;
+
+    fn create(self, state: State<S>) -> Self::Factory;
+}
+
+pub trait HttpService: Service<Response = Response> + 'static {
     fn handle(&mut self, req: Request) -> Result<Self::Future, Request>;
 }
 
-#[derive(Clone)]
-pub struct Router {
-    services: Rc<Vec<BoxedHttpNewService>>,
-    default: Rc<BoxedNewService>,
+/// Application state
+pub struct State<S>(Rc<S>);
+
+impl<S> State<S> {
+    pub fn new(state: S) -> State<S> {
+        State(Rc::new(state))
+    }
 }
 
-impl Router {
+impl<S> Deref for State<S> {
+    type Target = S;
+
+    fn deref(&self) -> &S {
+        self.0.as_ref()
+    }
+}
+
+impl<S> Clone for State<S> {
+    fn clone(&self) -> State<S> {
+        State(self.0.clone())
+    }
+}
+
+/// Application builder
+pub struct App<S = ()> {
+    services: Vec<BoxedHttpNewService>,
+    default: BoxedNewService,
+    state: State<S>,
+}
+
+impl App<()> {
     pub fn new() -> Self {
-        Router {
-            services: Rc::new(Vec::new()),
-            default: Rc::new(Box::new(DefaultNewService(not_found.into_new_service()))),
+        App {
+            services: Vec::new(),
+            default: Box::new(DefaultNewService(not_found.into_new_service())),
+            state: State::new(()),
+        }
+    }
+}
+
+impl<S> App<S> {
+    pub fn with(state: S) -> Self {
+        App {
+            services: Vec::new(),
+            default: Box::new(DefaultNewService(not_found.into_new_service())),
+            state: State::new(state),
         }
     }
 
-    pub fn service<T, F: IntoNewService<T>>(mut self, factory: F) -> Self
+    pub fn service<T>(mut self, factory: T) -> Self
     where
-        T: NewService<Request = Request, Response = Response> + 'static,
-        T::Future: 'static,
-        T::Service: HttpService,
-        <T::Service as Service>::Future: 'static,
+        T: HttpServiceFactory<S>,
+        T::Factory: NewService<Request = Request, Response = Response> + 'static,
+        <T::Factory as NewService>::Future: 'static,
+        <T::Factory as NewService>::Service: HttpService,
+        <<T::Factory as NewService>::Service as Service>::Future: 'static,
     {
-        Rc::get_mut(&mut self.services)
-            .expect("multiple copies exist")
-            .push(Box::new(HttpNewService(factory.into_new_service())));
+        self.services
+            .push(Box::new(HttpNewService(factory.create(self.state.clone()))));
         self
     }
 
@@ -43,25 +85,40 @@ impl Router {
         T::Future: 'static,
         <T::Service as Service>::Future: 'static,
     {
-        self.default = Rc::new(Box::new(DefaultNewService(factory.into_new_service())));
+        self.default = Box::new(DefaultNewService(factory.into_new_service()));
         self
     }
 }
 
-impl NewService for Router {
+impl<S> IntoNewService<AppFactory> for App<S> {
+    fn into_new_service(self) -> AppFactory {
+        AppFactory {
+            services: Rc::new(self.services),
+            default: Rc::new(self.default),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AppFactory {
+    services: Rc<Vec<BoxedHttpNewService>>,
+    default: Rc<BoxedNewService>,
+}
+
+impl NewService for AppFactory {
     type Request = Request;
     type Response = Response;
     type Error = ();
     type InitError = ();
-    type Service = CloneableService<RouterService>;
-    type Future = RouterFut;
+    type Service = CloneableService<AppService>;
+    type Future = CreateService;
 
     fn new_service(&self) -> Self::Future {
-        RouterFut {
+        CreateService {
             fut: self
                 .services
                 .iter()
-                .map(|service| RouterFutItem::Future(service.new_service()))
+                .map(|service| CreateServiceItem::Future(service.new_service()))
                 .collect(),
             default: None,
             default_fut: self.default.new_service(),
@@ -70,19 +127,19 @@ impl NewService for Router {
 }
 
 #[doc(hidden)]
-pub struct RouterFut {
-    fut: Vec<RouterFutItem>,
+pub struct CreateService {
+    fut: Vec<CreateServiceItem>,
     default: Option<BoxedService>,
     default_fut: Box<Future<Item = BoxedService, Error = ()>>,
 }
 
-enum RouterFutItem {
+enum CreateServiceItem {
     Future(Box<Future<Item = BoxedHttpService, Error = ()>>),
     Service(BoxedHttpService),
 }
 
-impl Future for RouterFut {
-    type Item = CloneableService<RouterService>;
+impl Future for CreateService {
+    type Item = CloneableService<AppService>;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -99,18 +156,18 @@ impl Future for RouterFut {
         // poll http services
         for item in &mut self.fut {
             let res = match item {
-                RouterFutItem::Future(ref mut fut) => match fut.poll()? {
+                CreateServiceItem::Future(ref mut fut) => match fut.poll()? {
                     Async::Ready(service) => Some(service),
                     Async::NotReady => {
                         done = false;
                         None
                     }
                 },
-                RouterFutItem::Service(_) => continue,
+                CreateServiceItem::Service(_) => continue,
             };
 
             if let Some(service) = res {
-                *item = RouterFutItem::Service(service);
+                *item = CreateServiceItem::Service(service);
             }
         }
 
@@ -119,10 +176,10 @@ impl Future for RouterFut {
                 .fut
                 .drain(..)
                 .map(|item| match item {
-                    RouterFutItem::Service(service) => service,
-                    RouterFutItem::Future(_) => unreachable!(),
+                    CreateServiceItem::Service(service) => service,
+                    CreateServiceItem::Future(_) => unreachable!(),
                 }).collect();
-            Ok(Async::Ready(CloneableService::new(RouterService {
+            Ok(Async::Ready(CloneableService::new(AppService {
                 services,
                 default: self.default.take().expect("something is wrong"),
             })))
@@ -132,12 +189,12 @@ impl Future for RouterFut {
     }
 }
 
-pub struct RouterService {
+pub struct AppService {
     services: Vec<BoxedHttpService>,
     default: BoxedService,
 }
 
-impl Service for RouterService {
+impl Service for AppService {
     type Request = Request;
     type Response = Response;
     type Error = ();

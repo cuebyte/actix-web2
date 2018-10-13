@@ -9,7 +9,7 @@ use super::request::Request;
 /// Trait implemented by types that generate responses for clients.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
-pub trait Responder {
+pub trait Responder<S = ()> {
     /// The associated item which can be returned.
     type Item: Into<AsyncResult<Response>>;
 
@@ -17,13 +17,13 @@ pub trait Responder {
     type Error: Into<Error>;
 
     /// Convert itself to `AsyncResult` or `Error`.
-    fn respond_to(self, req: Request) -> Result<Self::Item, Self::Error>;
+    fn respond_to(self, req: Request<S>) -> Result<Self::Item, Self::Error>;
 }
 
 /// Trait implemented by types that can be extracted from request.
 ///
 /// Types that implement this trait can be used with `Route::with()` method.
-pub trait FromRequest: Sized {
+pub trait FromRequest<S>: Sized {
     /// Configuration for conversion process
     type Config: Default;
 
@@ -31,12 +31,12 @@ pub trait FromRequest: Sized {
     type Result: Into<AsyncResult<Self>>;
 
     /// Convert request to a Self
-    fn from_request(req: &Request, cfg: &Self::Config) -> Self::Result;
+    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Result;
 
     /// Convert request to a Self
     ///
     /// This method uses default extractor configuration
-    fn extract(req: &Request) -> Self::Result {
+    fn extract(req: &Request<S>) -> Self::Result {
         Self::from_request(req, &Self::Config::default())
     }
 }
@@ -78,15 +78,15 @@ pub enum Either<A, B> {
     B(B),
 }
 
-impl<A, B> Responder for Either<A, B>
+impl<A, B, S> Responder<S> for Either<A, B>
 where
-    A: Responder,
-    B: Responder,
+    A: Responder<S>,
+    B: Responder<S>,
 {
     type Item = AsyncResult<Response>;
     type Error = Error;
 
-    fn respond_to(self, req: Request) -> Result<AsyncResult<Response>, Error> {
+    fn respond_to(self, req: Request<S>) -> Result<AsyncResult<Response>, Error> {
         match self {
             Either::A(a) => match a.respond_to(req) {
                 Ok(val) => Ok(val.into()),
@@ -116,14 +116,14 @@ where
     }
 }
 
-impl<T> Responder for Option<T>
+impl<T, S> Responder<S> for Option<T>
 where
-    T: Responder,
+    T: Responder<S>,
 {
     type Item = AsyncResult<Response>;
     type Error = Error;
 
-    fn respond_to(self, req: Request) -> Result<AsyncResult<Response>, Error> {
+    fn respond_to(self, req: Request<S>) -> Result<AsyncResult<Response>, Error> {
         match self {
             Some(t) => match t.respond_to(req) {
                 Ok(val) => Ok(val.into()),
@@ -255,21 +255,21 @@ impl<I, E> AsyncResult<I, E> {
     }
 }
 
-impl Responder for AsyncResult<Response> {
+impl<S> Responder<S> for AsyncResult<Response> {
     type Item = AsyncResult<Response>;
     type Error = Error;
 
-    fn respond_to(self, _: Request) -> Result<AsyncResult<Response>, Error> {
+    fn respond_to(self, _: Request<S>) -> Result<AsyncResult<Response>, Error> {
         Ok(self)
     }
 }
 
-impl Responder for Response {
+impl<S> Responder<S> for Response {
     type Item = AsyncResult<Response>;
     type Error = Error;
 
     #[inline]
-    fn respond_to(self, _: Request) -> Result<AsyncResult<Response>, Error> {
+    fn respond_to(self, _: Request<S>) -> Result<AsyncResult<Response>, Error> {
         Ok(AsyncResult(Some(AsyncResultItem::Ok(self))))
     }
 }
@@ -281,11 +281,11 @@ impl<T> From<T> for AsyncResult<T> {
     }
 }
 
-impl<T: Responder, E: Into<Error>> Responder for Result<T, E> {
-    type Item = <T as Responder>::Item;
+impl<S, T: Responder<S>, E: Into<Error>> Responder<S> for Result<T, E> {
+    type Item = <T as Responder<S>>::Item;
     type Error = Error;
 
-    fn respond_to(self, req: Request) -> Result<Self::Item, Error> {
+    fn respond_to(self, req: Request<S>) -> Result<Self::Item, Error> {
         match self {
             Ok(val) => match val.respond_to(req) {
                 Ok(val) => Ok(val),
@@ -342,16 +342,17 @@ impl<T> From<Box<Future<Item = T, Error = Error>>> for AsyncResult<T> {
 /// Convenience type alias
 pub type FutureResponse<I, E = Error> = Box<Future<Item = I, Error = E>>;
 
-impl<I, E> Responder for Box<Future<Item = I, Error = E>>
+impl<I, E, S> Responder<S> for Box<Future<Item = I, Error = E>>
 where
-    I: Responder + 'static,
+    S: 'static,
+    I: Responder<S> + 'static,
     E: Into<Error> + 'static,
 {
     type Item = AsyncResult<Response>;
     type Error = Error;
 
     #[inline]
-    fn respond_to(self, req: Request) -> Result<AsyncResult<Response>, Error> {
+    fn respond_to(self, req: Request<S>) -> Result<AsyncResult<Response>, Error> {
         let fut = self
             .map_err(|e| e.into())
             .then(move |r| match r.respond_to(req) {

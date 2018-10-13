@@ -6,18 +6,24 @@ use actix_http::http::HeaderMap;
 use actix_http::HttpMessage;
 use actix_http::Request as BaseRequest;
 
+use app::State;
 use handler::FromRequest;
 use param::Params;
 
-pub struct Request {
+pub struct Request<S = ()> {
     base: BaseRequest,
     params: Params,
+    state: State<S>,
 }
 
-impl Request {
+impl<S> Request<S> {
     #[inline]
-    pub fn new(base: BaseRequest, params: Params) -> Request {
-        Request { base, params }
+    pub fn new(state: State<S>, base: BaseRequest, params: Params) -> Request<S> {
+        Request {
+            state,
+            base,
+            params,
+        }
     }
 
     /// This method returns reference to current base `Request` object.
@@ -50,16 +56,17 @@ impl Request {
     }
 }
 
-impl Clone for Request {
-    fn clone(&self) -> Request {
+impl<S> Clone for Request<S> {
+    fn clone(&self) -> Request<S> {
         Request {
             base: self.base.clone_request(),
             params: self.params.clone(),
+            state: self.state.clone(),
         }
     }
 }
 
-impl Deref for Request {
+impl<S> Deref for Request<S> {
     type Target = BaseRequest;
 
     fn deref(&self) -> &BaseRequest {
@@ -67,7 +74,7 @@ impl Deref for Request {
     }
 }
 
-impl HttpMessage for Request {
+impl<S> HttpMessage for Request<S> {
     type Stream = Payload;
 
     #[inline]
@@ -81,17 +88,17 @@ impl HttpMessage for Request {
     }
 }
 
-impl FromRequest for Request {
+impl<S> FromRequest<S> for Request<S> {
     type Config = ();
     type Result = Self;
 
     #[inline]
-    fn from_request(req: &Request, _: &Self::Config) -> Self::Result {
+    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Result {
         req.clone()
     }
 }
 
-impl fmt::Debug for Request {
+impl<S> fmt::Debug for Request<S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(
             f,
