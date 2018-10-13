@@ -6,6 +6,7 @@ use std::{fmt, str};
 use bytes::Bytes;
 use encoding::all::UTF_8;
 use encoding::types::{DecoderTrap, Encoding};
+use futures::future::{err, ok, FutureResult};
 use futures::{future, Async, Future, Poll};
 use mime::Mime;
 use serde::de::{self, DeserializeOwned};
@@ -474,13 +475,16 @@ where
 }
 
 impl<T: Serialize, S> Responder<S> for Json<T> {
-    type Item = Response;
     type Error = Error;
+    type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Result<Response, Error> {
-        let body = serde_json::to_string(&self.0)?;
+    fn respond_to(self, _: Request<S>) -> Self::Future {
+        let body = match serde_json::to_string(&self.0) {
+            Ok(body) => body,
+            Err(e) => return err(e.into()),
+        };
 
-        Ok(Response::build(StatusCode::OK)
+        ok(Response::build(StatusCode::OK)
             .content_type("application/json")
             .body(body))
     }

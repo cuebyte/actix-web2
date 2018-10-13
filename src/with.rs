@@ -7,7 +7,7 @@ use futures::{Async, Future, Poll};
 use actix_http::{Error, Response};
 use actix_net::service::{NewService, Service};
 
-use handler::{AsyncResultItem, FromRequest, Responder};
+use handler::{AsyncResultItem, FromRequest, Responder, ResponseFuture};
 use request::Request;
 
 #[doc(hidden)]
@@ -78,24 +78,14 @@ where
     type Request = (T, Request<S>);
     type Response = Response;
     type Error = Error;
-    type Future = Either<
-        FutureResult<Response, Error>,
-        Box<Future<Item = Response, Error = Error>>,
-    >;
+    type Future = ResponseFuture<R::Future>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
 
     fn call(&mut self, (param, req): Self::Request) -> Self::Future {
-        match self.hnd.call(param).respond_to(req) {
-            Ok(res) => match res.into().into() {
-                AsyncResultItem::Err(e) => Either::A(err(e)),
-                AsyncResultItem::Ok(msg) => Either::A(ok(msg)),
-                AsyncResultItem::Future(fut) => Either::B(fut),
-            },
-            Err(e) => Either::A(err(e.into())),
-        }
+        ResponseFuture::new(self.hnd.call(param).respond_to(req))
     }
 }
 

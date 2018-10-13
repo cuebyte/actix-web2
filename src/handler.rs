@@ -1,4 +1,4 @@
-use futures::future::{err, ok, Future};
+use futures::future::{err, ok, Either as EitherFuture, Future, FutureResult};
 use futures::{Async, Poll};
 
 use actix_http::http::StatusCode;
@@ -10,14 +10,14 @@ use super::request::Request;
 ///
 /// Types that implement this trait can be used as the return type of a handler.
 pub trait Responder<S = ()> {
-    /// The associated item which can be returned.
-    type Item: Into<AsyncResult<Response>>;
-
     /// The associated error which can be returned.
     type Error: Into<Error>;
 
+    /// The future response value.
+    type Future: Future<Item = Response, Error = Self::Error>;
+
     /// Convert itself to `AsyncResult` or `Error`.
-    fn respond_to(self, req: Request<S>) -> Result<Self::Item, Self::Error>;
+    fn respond_to(self, req: Request<S>) -> Self::Future;
 }
 
 /// Trait implemented by types that can be extracted from request.
@@ -70,7 +70,6 @@ pub trait FromRequest<S>: Sized {
 /// # fn is_a_variant() -> bool { true }
 /// # fn main() {}
 /// ```
-#[derive(Debug)]
 pub enum Either<A, B> {
     /// First branch of the type
     A(A),
@@ -83,35 +82,42 @@ where
     A: Responder<S>,
     B: Responder<S>,
 {
-    type Item = AsyncResult<Response>;
     type Error = Error;
+    type Future = EitherResponder<A::Future, B::Future>;
 
-    fn respond_to(self, req: Request<S>) -> Result<AsyncResult<Response>, Error> {
+    fn respond_to(self, req: Request<S>) -> Self::Future {
         match self {
-            Either::A(a) => match a.respond_to(req) {
-                Ok(val) => Ok(val.into()),
-                Err(err) => Err(err.into()),
-            },
-            Either::B(b) => match b.respond_to(req) {
-                Ok(val) => Ok(val.into()),
-                Err(err) => Err(err.into()),
-            },
+            Either::A(a) => EitherResponder::A(a.respond_to(req)),
+            Either::B(b) => EitherResponder::B(b.respond_to(req)),
         }
     }
 }
 
-impl<A, B, I, E> Future for Either<A, B>
+pub enum EitherResponder<A, B>
 where
-    A: Future<Item = I, Error = E>,
-    B: Future<Item = I, Error = E>,
+    A: Future<Item = Response>,
+    A::Error: Into<Error>,
+    B: Future<Item = Response>,
+    B::Error: Into<Error>,
 {
-    type Item = I;
-    type Error = E;
+    A(A),
+    B(B),
+}
 
-    fn poll(&mut self) -> Poll<I, E> {
-        match *self {
-            Either::A(ref mut fut) => fut.poll(),
-            Either::B(ref mut fut) => fut.poll(),
+impl<A, B> Future for EitherResponder<A, B>
+where
+    A: Future<Item = Response>,
+    A::Error: Into<Error>,
+    B: Future<Item = Response>,
+    B::Error: Into<Error>,
+{
+    type Item = Response;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self {
+            EitherResponder::A(ref mut fut) => Ok(fut.poll().map_err(|e| e.into())?),
+            EitherResponder::B(ref mut fut) => Ok(fut.poll().map_err(|e| e.into())?),
         }
     }
 }
@@ -120,16 +126,15 @@ impl<T, S> Responder<S> for Option<T>
 where
     T: Responder<S>,
 {
-    type Item = AsyncResult<Response>;
-    type Error = Error;
+    type Error = T::Error;
+    type Future = EitherFuture<T::Future, FutureResult<Response, T::Error>>;
 
-    fn respond_to(self, req: Request<S>) -> Result<AsyncResult<Response>, Error> {
+    fn respond_to(self, req: Request<S>) -> Self::Future {
         match self {
-            Some(t) => match t.respond_to(req) {
-                Ok(val) => Ok(val.into()),
-                Err(err) => Err(err.into()),
-            },
-            None => Ok(Response::build(StatusCode::NOT_FOUND).finish().into()),
+            Some(t) => EitherFuture::A(t.respond_to(req)),
+            None => EitherFuture::B(ok(Response::build(StatusCode::NOT_FOUND)
+                .finish()
+                .into())),
         }
     }
 }
@@ -255,22 +260,13 @@ impl<I, E> AsyncResult<I, E> {
     }
 }
 
-impl<S> Responder<S> for AsyncResult<Response> {
-    type Item = AsyncResult<Response>;
-    type Error = Error;
-
-    fn respond_to(self, _: Request<S>) -> Result<AsyncResult<Response>, Error> {
-        Ok(self)
-    }
-}
-
 impl<S> Responder<S> for Response {
-    type Item = AsyncResult<Response>;
     type Error = Error;
+    type Future = FutureResult<Response, Error>;
 
     #[inline]
-    fn respond_to(self, _: Request<S>) -> Result<AsyncResult<Response>, Error> {
-        Ok(AsyncResult(Some(AsyncResultItem::Ok(self))))
+    fn respond_to(self, _: Request<S>) -> Self::Future {
+        ok(self)
     }
 }
 
@@ -282,17 +278,35 @@ impl<T> From<T> for AsyncResult<T> {
 }
 
 impl<S, T: Responder<S>, E: Into<Error>> Responder<S> for Result<T, E> {
-    type Item = <T as Responder<S>>::Item;
+    type Error = Error;
+    type Future = EitherFuture<ResponseFuture<T::Future>, FutureResult<Response, Error>>;
+
+    fn respond_to(self, req: Request<S>) -> Self::Future {
+        match self {
+            Ok(val) => EitherFuture::A(ResponseFuture::new(val.respond_to(req))),
+            Err(e) => EitherFuture::B(err(e.into())),
+        }
+    }
+}
+
+pub struct ResponseFuture<T>(T);
+
+impl<T> ResponseFuture<T> {
+    pub fn new(fut: T) -> Self {
+        ResponseFuture(fut)
+    }
+}
+
+impl<T> Future for ResponseFuture<T>
+where
+    T: Future<Item = Response>,
+    T::Error: Into<Error>,
+{
+    type Item = Response;
     type Error = Error;
 
-    fn respond_to(self, req: Request<S>) -> Result<Self::Item, Error> {
-        match self {
-            Ok(val) => match val.respond_to(req) {
-                Ok(val) => Ok(val),
-                Err(err) => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
-        }
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        Ok(self.0.poll().map_err(|e| e.into())?)
     }
 }
 
@@ -348,20 +362,14 @@ where
     I: Responder<S> + 'static,
     E: Into<Error> + 'static,
 {
-    type Item = AsyncResult<Response>;
     type Error = Error;
+    type Future = Box<Future<Item = Response, Error = Error>>;
 
     #[inline]
-    fn respond_to(self, req: Request<S>) -> Result<AsyncResult<Response>, Error> {
-        let fut = self
-            .map_err(|e| e.into())
-            .then(move |r| match r.respond_to(req) {
-                Ok(reply) => match reply.into().into() {
-                    AsyncResultItem::Ok(resp) => ok(resp),
-                    _ => panic!("Nested async replies are not supported"),
-                },
-                Err(e) => err(e),
-            });
-        Ok(AsyncResult::async(Box::new(fut)))
+    fn respond_to(self, req: Request<S>) -> Self::Future {
+        Box::new(
+            self.map_err(|e| e.into())
+                .and_then(move |r| ResponseFuture(r.respond_to(req))),
+        )
     }
 }
