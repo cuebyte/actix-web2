@@ -7,6 +7,7 @@ extern crate futures;
 
 use actix_http::h1;
 use actix_net::server::Server;
+use actix_net::service::NewServiceExt;
 use actix_web2::{App, Request, Route};
 
 fn index(req: Request) -> &'static str {
@@ -31,7 +32,7 @@ fn main() {
                     .service(Route::build("/resource2/index.html").finish(index))
                     .service(Route::build("/test1.html").finish(|| "Test\r\n"))
                     .service(Route::build("/").finish(no_params)),
-            )
+            ).map(|_| ())
         }).unwrap()
         .start();
 
