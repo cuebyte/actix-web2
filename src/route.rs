@@ -1,13 +1,13 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use actix_http::http::{HeaderName, HeaderValue, Method};
 use actix_http::{Error, Request, Response, ResponseError};
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
 
 use super::app::{HttpService, HttpServiceFactory, State};
-use super::handler::{Extract, Factory, FromRequest, Handle};
+use super::handler::{AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle};
 use super::param::Params;
 use super::pattern::ResourcePattern;
 use super::request::Request as WebRequest;
@@ -28,6 +28,22 @@ pub struct Route<T, S = ()> {
 impl<S> Route<(), S> {
     pub fn build(path: &str) -> RoutePatternBuilder<S> {
         RoutePatternBuilder::new(path)
+    }
+
+    pub fn get(path: &str) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(path).method(Method::GET)
+    }
+
+    pub fn post(path: &str) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(path).method(Method::POST)
+    }
+
+    pub fn put(path: &str) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(path).method(Method::PUT)
+    }
+
+    pub fn delete(path: &str) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(path).method(Method::DELETE)
     }
 }
 
@@ -195,6 +211,12 @@ impl<S> RoutePatternBuilder<S> {
             state: PhantomData,
         }
     }
+
+    pub fn method(mut self, method: Method) -> Self {
+        self.methods.push(method);
+        self
+    }
+
     pub fn middleware<T, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S>
     where
         T: NewService<Request = WebRequest<S>, Response = WebRequest<S>, InitError = ()>,
@@ -232,6 +254,34 @@ impl<S> RoutePatternBuilder<S> {
             state: PhantomData,
         }
     }
+
+    pub fn async<F, P, R, I, E>(
+        self, handler: F,
+    ) -> Route<
+        impl NewService<
+            Request = WebRequest<S>,
+            Response = Response,
+            Error = Error,
+            InitError = (),
+        >,
+        S,
+    >
+    where
+        F: AsyncFactory<S, P, R, I, E>,
+        P: FromRequest<S> + 'static,
+        R: IntoFuture<Item = I, Error = E>,
+        I: Into<Response>,
+        E: Into<Error>,
+    {
+        Route {
+            service: Extract::new(P::Config::default())
+                .and_then(AsyncHandle::new(handler)),
+            pattern: self.pattern,
+            methods: self.methods,
+            headers: self.headers,
+            state: PhantomData,
+        }
+    }
 }
 
 pub struct RouteBuilder<T, S> {
@@ -256,6 +306,11 @@ where
         }
     }
 
+    pub fn method(mut self, method: Method) -> Self {
+        self.methods.push(method);
+        self
+    }
+
     pub fn middleware<U, F: IntoNewService<U>>(
         self, md: F,
     ) -> RouteBuilder<
@@ -273,6 +328,38 @@ where
     {
         RouteBuilder {
             service: self.service.from_err().and_then(md.into_new_service()),
+            pattern: self.pattern,
+            methods: self.methods,
+            headers: self.headers,
+            state: PhantomData,
+        }
+    }
+
+    pub fn async<F, P, R, I, E>(
+        self, handler: F,
+    ) -> Route<
+        impl NewService<
+            Request = WebRequest<S>,
+            Response = Response,
+            Error = Error,
+            InitError = (),
+        >,
+        S,
+    >
+    where
+        F: AsyncFactory<S, P, R, I, E>,
+        P: FromRequest<S> + 'static,
+        R: IntoFuture<Item = I, Error = E>,
+        I: Into<Response>,
+        E: Into<Error>,
+        T::Error: ResponseError,
+    {
+        Route {
+            service: self
+                .service
+                .from_err()
+                .and_then(Extract::new(P::Config::default()))
+                .and_then(AsyncHandle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
             headers: self.headers,

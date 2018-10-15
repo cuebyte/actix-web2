@@ -27,6 +27,26 @@ impl<S> Request<S> {
         }
     }
 
+    /// Construct new http request with empty state.
+    pub fn drop_state(&self) -> Request<()> {
+        Request {
+            state: State::new(()),
+            base: self.base.clone_request(),
+            params: self.params.clone(),
+        }
+    }
+
+    #[inline]
+    /// Shared application state
+    pub fn state(&self) -> &S {
+        &self.state
+    }
+
+    /// Returns shared application state
+    pub fn get_state(&self) -> State<S> {
+        self.state.clone()
+    }
+
     /// This method returns reference to current base `Request` object.
     #[inline]
     pub fn request(&self) -> &BaseRequest {

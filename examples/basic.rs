@@ -5,14 +5,22 @@ extern crate actix_web2;
 extern crate env_logger;
 extern crate futures;
 
+use futures::IntoFuture;
+
 use actix_http::h1;
 use actix_net::server::Server;
 use actix_net::service::NewServiceExt;
-use actix_web2::{App, Request, Route};
+use actix_web2::dev::AsyncFactory;
+use actix_web2::{App, Error, Request, Route};
 
 fn index(req: Request) -> &'static str {
     println!("REQ: {:?}", req);
     "Hello world!\r\n"
+}
+
+fn index_async(req: Request) -> impl IntoFuture<Item = &'static str, Error = Error> {
+    println!("REQ: {:?}", req);
+    Ok("Hello world!\r\n")
 }
 
 fn no_params() -> &'static str {
@@ -29,7 +37,7 @@ fn main() {
             h1::H1Service::new(
                 App::new()
                     .service(Route::build("/resource1/index.html").finish(index))
-                    .service(Route::build("/resource2/index.html").finish(index))
+                    .service(Route::build("/resource2/index.html").async(index_async))
                     .service(Route::build("/test1.html").finish(|| "Test\r\n"))
                     .service(Route::build("/").finish(no_params)),
             ).map(|_| ())

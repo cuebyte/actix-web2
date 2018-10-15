@@ -21,7 +21,7 @@ mod responder;
 mod route;
 
 // re-export for convinience
-pub use actix_http::{Error, Response};
+pub use actix_http::{Error, HttpMessage, Response, ResponseError};
 
 pub use app::{App, AppService, State};
 pub use extractor::{Form, Json, Path, Query};
@@ -31,6 +31,6 @@ pub use responder::{Either, Responder};
 pub use route::Route;
 
 pub mod dev {
-    pub use handler::{Extract, Factory, Handle};
+    pub use handler::{AsyncFactory, Extract, Factory, Handle};
     pub use param::Params;
 }

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use actix_http::{Error, Response};
 use actix_net::service::{NewService, Service};
 use futures::future::{ok, FutureResult};
-use futures::{Async, Future, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use request::Request;
 use responder::{Responder, ResponseFuture};
@@ -122,6 +122,133 @@ where
     }
 }
 
+/// Async handler converter factory
+pub trait AsyncFactory<S, T, R, I, E>: Clone + 'static
+where
+    R: IntoFuture<Item = I, Error = E>,
+    I: Into<Response>,
+    E: Into<Error>,
+{
+    fn call(&self, param: T) -> R;
+}
+
+impl<S, F, R, I, E> AsyncFactory<S, (), R, I, E> for F
+where
+    F: Fn() -> R + Clone + 'static,
+    R: IntoFuture<Item = I, Error = E>,
+    I: Into<Response>,
+    E: Into<Error>,
+{
+    fn call(&self, _: ()) -> R {
+        (self)()
+    }
+}
+
+#[doc(hidden)]
+pub struct AsyncHandle<S, F, T, R, I, E>
+where
+    F: AsyncFactory<S, T, R, I, E>,
+    R: IntoFuture<Item = I, Error = E>,
+    I: Into<Response>,
+    E: Into<Error>,
+{
+    hnd: F,
+    _t: PhantomData<(S, T, R, I, E)>,
+}
+
+impl<S, F, T, R, I, E> AsyncHandle<S, F, T, R, I, E>
+where
+    F: AsyncFactory<S, T, R, I, E>,
+    R: IntoFuture<Item = I, Error = E>,
+    I: Into<Response>,
+    E: Into<Error>,
+{
+    pub fn new(hnd: F) -> Self {
+        AsyncHandle {
+            hnd,
+            _t: PhantomData,
+        }
+    }
+}
+impl<S, F, T, R, I, E> NewService for AsyncHandle<S, F, T, R, I, E>
+where
+    F: AsyncFactory<S, T, R, I, E>,
+    R: IntoFuture<Item = I, Error = E>,
+    I: Into<Response>,
+    E: Into<Error>,
+{
+    type Request = (T, Request<S>);
+    type Response = Response;
+    type Error = Error;
+    type InitError = ();
+    type Service = AsyncHandleService<S, F, T, R, I, E>;
+    type Future = FutureResult<Self::Service, ()>;
+
+    fn new_service(&self) -> Self::Future {
+        ok(AsyncHandleService {
+            hnd: self.hnd.clone(),
+            _t: PhantomData,
+        })
+    }
+}
+
+#[doc(hidden)]
+pub struct AsyncHandleService<S, F, T, R, I, E>
+where
+    F: AsyncFactory<S, T, R, I, E>,
+    R: IntoFuture<Item = I, Error = E>,
+    I: Into<Response>,
+    E: Into<Error>,
+{
+    hnd: F,
+    _t: PhantomData<(S, T, R, I, E)>,
+}
+
+impl<S, F, T, R, I, E> Service for AsyncHandleService<S, F, T, R, I, E>
+where
+    F: AsyncFactory<S, T, R, I, E>,
+    R: IntoFuture<Item = I, Error = E>,
+    I: Into<Response>,
+    E: Into<Error>,
+{
+    type Request = (T, Request<S>);
+    type Response = Response;
+    type Error = Error;
+    type Future = AsyncHandleServiceResponse<R::Future>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+
+    fn call(&mut self, (param, _): Self::Request) -> Self::Future {
+        AsyncHandleServiceResponse::new(self.hnd.call(param).into_future())
+    }
+}
+
+#[doc(hidden)]
+pub struct AsyncHandleServiceResponse<T>(T);
+
+impl<T> AsyncHandleServiceResponse<T> {
+    pub fn new(fut: T) -> Self {
+        AsyncHandleServiceResponse(fut)
+    }
+}
+
+impl<T> Future for AsyncHandleServiceResponse<T>
+where
+    T: Future,
+    T::Item: Into<Response>,
+    T::Error: Into<Error>,
+{
+    type Item = Response;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let res = try_ready!(self.0.poll().map_err(|e| e.into()));
+        Ok(Async::Ready(res.into()))
+    }
+}
+
 pub struct Extract<T, S>
 where
     T: FromRequest<S>,
@@ -214,6 +341,19 @@ macro_rules! factory_tuple ({$(($n:tt, $T:ident)),+} => {
             (self)($(param.$n,)+)
         }
     }
+
+    impl<S, $($T,)+ Func, Res, It, Err> AsyncFactory<S, ($($T,)+), Res, It, Err> for Func
+    where Func: Fn($($T,)+) -> Res + Clone + 'static,
+        $($T: FromRequest<S> + 'static,)+
+          Res: IntoFuture<Item=It, Error=Err> + 'static,
+          It: Into<Response>,
+          Err: Into<Error>,
+    {
+        fn call(&self, param: ($($T,)+)) -> Res {
+            (self)($(param.$n,)+)
+        }
+    }
+
 });
 
 factory_tuple!((0, A));

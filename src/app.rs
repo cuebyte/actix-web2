@@ -1,11 +1,14 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
-use actix_http::{Request, Response};
+use actix_http::{Error, Request, Response};
 use actix_net::cloneable::CloneableService;
 use actix_net::service::{IntoNewService, NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
+
+use handler::FromRequest;
+use request::Request as WebRequest;
 
 pub trait HttpServiceFactory<S> {
     type Factory: NewService;
@@ -37,6 +40,17 @@ impl<S> Deref for State<S> {
 impl<S> Clone for State<S> {
     fn clone(&self) -> State<S> {
         State(self.0.clone())
+    }
+}
+
+impl<S> FromRequest<S> for State<S> {
+    type Config = ();
+    type Error = Error;
+    type Future = FutureResult<Self, Error>;
+
+    #[inline]
+    fn from_request(req: &WebRequest<S>, _: &Self::Config) -> Self::Future {
+        ok(req.get_state())
     }
 }
 
