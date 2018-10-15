@@ -8,7 +8,13 @@ use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
 use handler::FromRequest;
+use helpers::{
+    not_found, BoxedHttpNewService, BoxedHttpService, DefaultNewService,
+    HttpDefaultNewService, HttpDefaultService, HttpNewService,
+};
 use request::Request as WebRequest;
+
+type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
 
 pub trait HttpServiceFactory<S> {
     type Factory: NewService;
@@ -16,8 +22,8 @@ pub trait HttpServiceFactory<S> {
     fn create(self, state: State<S>) -> Self::Factory;
 }
 
-pub trait HttpService: Service<Response = Response> + 'static {
-    fn handle(&mut self, req: Request) -> Result<Self::Future, Request>;
+pub trait HttpService: Service + 'static {
+    fn handle(&mut self, req: Self::Request) -> Result<Self::Future, Request>;
 }
 
 /// Application state
@@ -56,8 +62,8 @@ impl<S> FromRequest<S> for State<S> {
 
 /// Application builder
 pub struct App<S = ()> {
-    services: Vec<BoxedHttpNewService>,
-    default: BoxedNewService,
+    services: Vec<BoxedHttpNewService<Request, Response>>,
+    default: HttpDefaultNewService<Request, Response>,
     state: State<S>,
 }
 
@@ -65,7 +71,7 @@ impl App<()> {
     pub fn new() -> Self {
         App {
             services: Vec::new(),
-            default: Box::new(DefaultNewService(not_found.into_new_service())),
+            default: Box::new(DefaultNewService::new(not_found.into_new_service())),
             state: State::new(()),
         }
     }
@@ -75,7 +81,7 @@ impl<S> App<S> {
     pub fn with(state: S) -> Self {
         App {
             services: Vec::new(),
-            default: Box::new(DefaultNewService(not_found.into_new_service())),
+            default: Box::new(DefaultNewService::new(not_found.into_new_service())),
             state: State::new(state),
         }
     }
@@ -88,8 +94,9 @@ impl<S> App<S> {
         <T::Factory as NewService>::Service: HttpService,
         <<T::Factory as NewService>::Service as Service>::Future: 'static,
     {
-        self.services
-            .push(Box::new(HttpNewService(factory.create(self.state.clone()))));
+        self.services.push(Box::new(HttpNewService::new(
+            factory.create(self.state.clone()),
+        )));
         self
     }
 
@@ -99,7 +106,7 @@ impl<S> App<S> {
         T::Future: 'static,
         <T::Service as Service>::Future: 'static,
     {
-        self.default = Box::new(DefaultNewService(factory.into_new_service()));
+        self.default = Box::new(DefaultNewService::new(factory.into_new_service()));
         self
     }
 }
@@ -115,8 +122,8 @@ impl<S> IntoNewService<AppFactory> for App<S> {
 
 #[derive(Clone)]
 pub struct AppFactory {
-    services: Rc<Vec<BoxedHttpNewService>>,
-    default: Rc<BoxedNewService>,
+    services: Rc<Vec<BoxedHttpNewService<Request, Response>>>,
+    default: Rc<HttpDefaultNewService<Request, Response>>,
 }
 
 impl NewService for AppFactory {
@@ -143,13 +150,13 @@ impl NewService for AppFactory {
 #[doc(hidden)]
 pub struct CreateService {
     fut: Vec<CreateServiceItem>,
-    default: Option<BoxedService>,
-    default_fut: Box<Future<Item = BoxedService, Error = ()>>,
+    default: Option<HttpDefaultService<Request, Response>>,
+    default_fut: Box<Future<Item = HttpDefaultService<Request, Response>, Error = ()>>,
 }
 
 enum CreateServiceItem {
-    Future(Box<Future<Item = BoxedHttpService, Error = ()>>),
-    Service(BoxedHttpService),
+    Future(Box<Future<Item = BoxedHttpService<Request, Response>, Error = ()>>),
+    Service(BoxedHttpService<Request, Response>),
 }
 
 impl Future for CreateService {
@@ -204,8 +211,8 @@ impl Future for CreateService {
 }
 
 pub struct AppService {
-    services: Vec<BoxedHttpService>,
-    default: BoxedService,
+    services: Vec<BoxedHttpService<Request, Response>>,
+    default: HttpDefaultService<Request, Response>,
 }
 
 impl Service for AppService {
@@ -237,158 +244,5 @@ impl Service for AppService {
             };
         }
         self.default.call(req)
-    }
-}
-
-type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
-
-type BoxedHttpService = Box<
-    HttpService<
-        Request = Request,
-        Response = Response,
-        Error = (),
-        Future = Box<Future<Item = Response, Error = ()>>,
-    >,
->;
-
-type BoxedHttpNewService = Box<
-    NewService<
-        Request = Request,
-        Response = Response,
-        Error = (),
-        InitError = (),
-        Service = BoxedHttpService,
-        Future = Box<Future<Item = BoxedHttpService, Error = ()>>,
-    >,
->;
-
-struct HttpNewService<T: NewService>(T);
-
-impl<T> NewService for HttpNewService<T>
-where
-    T: NewService<Request = Request, Response = Response>,
-    T::Future: 'static,
-    T::Service: HttpService,
-    <T::Service as Service>::Future: 'static,
-{
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = ();
-    type InitError = ();
-    type Service = BoxedHttpService;
-    type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
-
-    fn new_service(&self) -> Self::Future {
-        Box::new(self.0.new_service().map_err(|_| ()).and_then(|service| {
-            let service: BoxedHttpService = Box::new(HttpServiceWrapper { service });
-            Ok(service)
-        }))
-    }
-}
-
-struct HttpServiceWrapper<T: Service> {
-    service: T,
-}
-
-impl<T> Service for HttpServiceWrapper<T>
-where
-    T::Future: 'static,
-    T: HttpService,
-    T: Service<Request = Request, Response = Response>,
-{
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = ();
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.poll_ready().map_err(|_| ())
-    }
-
-    fn call(&mut self, req: Self::Request) -> Self::Future {
-        Box::new(self.service.call(req).map_err(|_| ()))
-    }
-}
-
-impl<T: HttpService> HttpService for HttpServiceWrapper<T>
-where
-    T::Future: 'static,
-    T: Service<Request = Request, Response = Response>,
-{
-    fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {
-        match self.service.handle(req) {
-            Ok(fut) => Ok(Box::new(fut.map_err(|_| ()))),
-            Err(req) => Err(req),
-        }
-    }
-}
-
-fn not_found(_: Request) -> FutureResult<Response, ()> {
-    ok(Response::NotFound().finish())
-}
-
-type BoxedService = Box<
-    Service<
-        Request = Request,
-        Response = Response,
-        Error = (),
-        Future = Box<Future<Item = Response, Error = ()>>,
-    >,
->;
-
-type BoxedNewService = Box<
-    NewService<
-        Request = Request,
-        Response = Response,
-        Error = (),
-        InitError = (),
-        Service = BoxedService,
-        Future = Box<Future<Item = BoxedService, Error = ()>>,
-    >,
->;
-
-struct DefaultNewService<T: NewService>(T);
-
-impl<T> NewService for DefaultNewService<T>
-where
-    T: NewService<Request = Request, Response = Response> + 'static,
-    T::Future: 'static,
-    <T::Service as Service>::Future: 'static,
-{
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = ();
-    type InitError = ();
-    type Service = BoxedService;
-    type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
-
-    fn new_service(&self) -> Self::Future {
-        Box::new(self.0.new_service().map_err(|_| ()).and_then(|service| {
-            let service: BoxedService = Box::new(DefaultServiceWrapper { service });
-            Ok(service)
-        }))
-    }
-}
-
-struct DefaultServiceWrapper<T: Service> {
-    service: T,
-}
-
-impl<T> Service for DefaultServiceWrapper<T>
-where
-    T::Future: 'static,
-    T: Service<Request = Request, Response = Response> + 'static,
-{
-    type Request = T::Request;
-    type Response = T::Response;
-    type Error = ();
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.poll_ready().map_err(|_| ())
-    }
-
-    fn call(&mut self, req: Self::Request) -> Self::Future {
-        Box::new(self.service.call(req).map_err(|_| ()))
     }
 }
