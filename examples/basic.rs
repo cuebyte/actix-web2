@@ -10,7 +10,6 @@ use futures::IntoFuture;
 use actix_http::h1;
 use actix_net::server::Server;
 use actix_net::service::NewServiceExt;
-use actix_web2::dev::AsyncFactory;
 use actix_web2::{App, Error, Request, Route};
 
 fn index(req: Request) -> &'static str {

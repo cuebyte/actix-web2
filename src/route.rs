@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use futures::{Async, Future, IntoFuture, Poll};
 
 use actix_http::http::{HeaderName, HeaderValue, Method};
-use actix_http::{Error, Request, Response, ResponseError};
+use actix_http::{Error, Request, Response};
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
 
 use super::app::{HttpService, HttpServiceFactory, State};
@@ -217,7 +217,7 @@ impl<S> RoutePatternBuilder<S> {
         self
     }
 
-    pub fn middleware<T, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S>
+    pub fn map<T, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S>
     where
         T: NewService<Request = WebRequest<S>, Response = WebRequest<S>, InitError = ()>,
     {
@@ -255,7 +255,7 @@ impl<S> RoutePatternBuilder<S> {
         }
     }
 
-    pub fn async<F, P, R, I, E>(
+    pub fn with<F, P, R, I, E>(
         self, handler: F,
     ) -> Route<
         impl NewService<
@@ -294,7 +294,12 @@ pub struct RouteBuilder<T, S> {
 
 impl<T, S> RouteBuilder<T, S>
 where
-    T: NewService<Request = WebRequest<S>, Response = WebRequest<S>, InitError = ()>,
+    T: NewService<
+        Request = WebRequest<S>,
+        Response = WebRequest<S>,
+        Error = Error,
+        InitError = (),
+    >,
 {
     pub fn new<F: IntoNewService<T>>(path: &str, factory: F) -> Self {
         RouteBuilder {
@@ -311,7 +316,7 @@ where
         self
     }
 
-    pub fn middleware<U, F: IntoNewService<U>>(
+    pub fn map<U, F: IntoNewService<U>>(
         self, md: F,
     ) -> RouteBuilder<
         impl NewService<
@@ -335,7 +340,7 @@ where
         }
     }
 
-    pub fn async<F, P, R, I, E>(
+    pub fn with<F, P, R, I, E>(
         self, handler: F,
     ) -> Route<
         impl NewService<
@@ -352,12 +357,10 @@ where
         R: IntoFuture<Item = I, Error = E>,
         I: Into<Response>,
         E: Into<Error>,
-        T::Error: ResponseError,
     {
         Route {
             service: self
                 .service
-                .from_err()
                 .and_then(Extract::new(P::Config::default()))
                 .and_then(AsyncHandle::new(handler)),
             pattern: self.pattern,
@@ -382,12 +385,10 @@ where
         F: Factory<S, P, R> + 'static,
         P: FromRequest<S> + 'static,
         R: Responder<S> + 'static,
-        T::Error: ResponseError,
     {
         Route {
             service: self
                 .service
-                .from_err()
                 .and_then(Extract::new(P::Config::default()))
                 .and_then(Handle::new(handler)),
             pattern: self.pattern,

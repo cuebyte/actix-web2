@@ -1,4 +1,4 @@
-use actix_http::{Request, Response};
+use actix_http::Response;
 use actix_net::service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Future, Poll};
@@ -96,7 +96,7 @@ where
     T::Future: 'static,
     T: Service,
 {
-    fn handle(&mut self, req: Self::Request) -> Result<Self::Future, Request> {
+    fn handle(&mut self, req: Self::Request) -> Result<Self::Future, Self::Request> {
         match self.service.handle(req) {
             Ok(fut) => Ok(Box::new(fut.map_err(|_| ()))),
             Err(req) => Err(req),
@@ -104,7 +104,7 @@ where
     }
 }
 
-pub(crate) fn not_found(_: Request) -> FutureResult<Response, ()> {
+pub(crate) fn not_found<Req>(_: Req) -> FutureResult<Response, ()> {
     ok(Response::NotFound().finish())
 }
 

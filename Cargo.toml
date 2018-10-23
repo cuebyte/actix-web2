@@ -24,8 +24,8 @@ path = "src/lib.rs"
 
 [dependencies]
 actix-net = "0.1.1"
-actix-http = { git = "https://github.com/fafhrd91/actix-http.git" }
-# actix-http = { path="../actix-http" }
+#actix-http = { git = "https://github.com/fafhrd91/actix-http.git" }
+actix-http = { path="../actix-http" }
 
 bytes = "0.4"
 futures = "0.1"

@@ -23,7 +23,7 @@ pub trait HttpServiceFactory<S> {
 }
 
 pub trait HttpService: Service + 'static {
-    fn handle(&mut self, req: Self::Request) -> Result<Self::Future, Request>;
+    fn handle(&mut self, req: Self::Request) -> Result<Self::Future, Self::Request>;
 }
 
 /// Application state
