@@ -54,6 +54,19 @@ impl<T: 'static, S> FramedApp<T, S> {
         self
     }
 
+    pub fn register_service<U>(&mut self, factory: U)
+    where
+        U: HttpServiceFactory<S>,
+        U::Factory: NewService<Request = FramedRequest<T>, Response = ()> + 'static,
+        <U::Factory as NewService>::Future: 'static,
+        <U::Factory as NewService>::Service: HttpService,
+        <<U::Factory as NewService>::Service as Service>::Future: 'static,
+    {
+        self.services.push(Box::new(HttpNewService::new(
+            factory.create(self.state.clone()),
+        )));
+    }
+
     // pub fn default_service<U, F: IntoNewService<U>>(mut self, factory: F) -> Self
     // where
     //     U: NewService<Request = FramedRequest<T>, Response = ()> + 'static,

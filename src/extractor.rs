@@ -7,7 +7,7 @@ use bytes::Bytes;
 use encoding::all::UTF_8;
 use encoding::types::{DecoderTrap, Encoding};
 use futures::future::{err, ok, Either, FutureResult};
-use futures::{future, Async, Future, Poll};
+use futures::{future, Async, Future, IntoFuture, Poll};
 use mime::Mime;
 use serde::de::{self, DeserializeOwned};
 use serde::Serialize;
@@ -107,6 +107,15 @@ impl<T> Path<T> {
     pub fn into_inner(self) -> T {
         self.inner
     }
+
+    /// Extract path information from a request
+    pub fn extract<S>(req: &Request<S>) -> Result<Path<T>, serde::de::value::Error>
+    where
+        T: DeserializeOwned,
+    {
+        de::Deserialize::deserialize(PathDeserializer::new(req))
+            .map(|inner| Path { inner })
+    }
 }
 
 impl<T> From<T> for Path<T> {
@@ -125,11 +134,7 @@ where
 
     #[inline]
     fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
-        let req = req.clone();
-        match de::Deserialize::deserialize(PathDeserializer::new(&req)) {
-            Ok(inner) => ok(Path { inner }),
-            Err(e) => err(ErrorNotFound(e)),
-        }
+        Self::extract(req).map_err(ErrorNotFound).into_future()
     }
 }
 
