@@ -2,11 +2,12 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use actix_http::h1::Codec;
-use actix_http::Request;
+use actix_http::{Request, Response};
 use actix_net::cloneable::CloneableService;
 use actix_net::codec::Framed;
 use actix_net::service::{IntoNewService, NewService, Service};
-use futures::{Async, Future, Poll};
+use futures::{Async, Future, Poll, Sink};
+use tokio_io::{AsyncRead, AsyncWrite};
 
 use app::{HttpService, HttpServiceFactory, State};
 use helpers::{BoxedHttpNewService, BoxedHttpService, HttpNewService};
@@ -78,7 +79,10 @@ impl<T: 'static, S> FramedApp<T, S> {
     // }
 }
 
-impl<T: 'static, S> IntoNewService<FramedAppFactory<T>> for FramedApp<T, S> {
+impl<T: 'static, S> IntoNewService<FramedAppFactory<T>> for FramedApp<T, S>
+where
+    T: AsyncRead + AsyncWrite,
+{
     fn into_new_service(self) -> FramedAppFactory<T> {
         FramedAppFactory {
             services: Rc::new(self.services),
@@ -95,7 +99,10 @@ pub struct FramedAppFactory<T> {
     _t: PhantomData<T>,
 }
 
-impl<T: 'static> NewService for FramedAppFactory<T> {
+impl<T: 'static> NewService for FramedAppFactory<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
     type Request = FramedRequest<T>;
     type Response = ();
     type Error = ();
@@ -129,7 +136,10 @@ enum CreateServiceItem<T> {
     Service(BoxedHttpService<(Request, Framed<T, Codec>), ()>),
 }
 
-impl<T: 'static> Future for CreateService<T> {
+impl<T: 'static> Future for CreateService<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
     type Item = CloneableService<FramedAppService<T>>;
     type Error = ();
 
@@ -187,7 +197,10 @@ pub struct FramedAppService<T> {
     _t: PhantomData<T>,
 }
 
-impl<T: 'static> Service for FramedAppService<T> {
+impl<T: 'static> Service for FramedAppService<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
     type Request = FramedRequest<T>;
     type Response = ();
     type Error = ();
@@ -216,6 +229,12 @@ impl<T: 'static> Service for FramedAppService<T> {
             };
         }
         // self.default.call(req)
-        panic!();
+        println!("REQ: {:?}", req.0);
+        Box::new(
+            req.1
+                .send(Response::NotFound().finish().into())
+                .map(|_| ())
+                .map_err(|_| ()),
+        )
     }
 }

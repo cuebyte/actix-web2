@@ -13,6 +13,7 @@ extern crate regex;
 extern crate serde;
 extern crate serde_urlencoded;
 extern crate tokio;
+extern crate tokio_io;
 
 mod app;
 mod de;
