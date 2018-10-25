@@ -229,7 +229,6 @@ where
             };
         }
         // self.default.call(req)
-        println!("REQ: {:?}", req.0);
         Box::new(
             req.1
                 .send(Response::NotFound().finish().into())

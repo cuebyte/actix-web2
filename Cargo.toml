@@ -27,7 +27,7 @@ actix = "0.7"
 actix-web = "0.7.13"
 # actix-net = "0.1.1"
 actix-net = { git = "https://github.com/actix/actix-net.git" }
-actix-http = { path="../actix-http" }
+actix-http = { git = "https://github.com/fafhrd91/actix-http.git" }
 
 net2 = "0.2"
 bytes = "0.4"

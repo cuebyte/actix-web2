@@ -6,6 +6,8 @@ extern crate bytes;
 extern crate encoding;
 #[macro_use]
 extern crate futures;
+#[macro_use]
+extern crate log;
 extern crate mime;
 extern crate net2;
 extern crate regex;
@@ -49,7 +51,7 @@ pub mod dev {
 pub mod framed {
     pub use super::framed_app::{FramedApp, FramedAppService};
     pub use super::framed_handler::{
-        FramedExtract, FramedFactory, FramedHandle, FramedRequest,
+        FramedError, FramedExtract, FramedFactory, FramedHandle, FramedRequest,
     };
     pub use super::framed_route::FramedRoute;
 }

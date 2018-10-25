@@ -1,12 +1,13 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, IntoFuture, Poll, Sink};
 
 use actix_http::h1::Codec;
 use actix_http::http::{HeaderName, HeaderValue, Method};
-use actix_http::{Error, Request};
+use actix_http::{Error, Request, Response};
 use actix_net::codec::Framed;
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
+use tokio_io::{AsyncRead, AsyncWrite};
 
 use super::app::{HttpService, HttpServiceFactory, State};
 use super::handler::FromRequest;
@@ -14,7 +15,9 @@ use super::param::Params;
 use super::pattern::ResourcePattern;
 use super::request::Request as WebRequest;
 
-use super::framed_handler::{FramedExtract, FramedFactory, FramedHandle, FramedRequest};
+use super::framed_handler::{
+    FramedError, FramedExtract, FramedFactory, FramedHandle, FramedRequest,
+};
 
 /// Resource route definition
 ///
@@ -52,7 +55,11 @@ impl<Io, S> FramedRoute<Io, (), S> {
 
 impl<Io, T, S> FramedRoute<Io, T, S>
 where
-    T: NewService<Request = FramedRequest<Io, S>, Response = ()> + 'static,
+    T: NewService<
+            Request = FramedRequest<S, Io>,
+            Response = (),
+            Error = FramedError<Io>,
+        > + 'static,
 {
     pub fn new<F: IntoNewService<T>>(pattern: ResourcePattern, factory: F) -> Self {
         FramedRoute {
@@ -77,8 +84,12 @@ where
 
 impl<Io, T, S> HttpServiceFactory<S> for FramedRoute<Io, T, S>
 where
-    T: NewService<Request = FramedRequest<S, Framed<Io, Codec>>, Response = ()>
-        + 'static,
+    Io: AsyncRead + AsyncWrite + 'static,
+    T: NewService<
+            Request = FramedRequest<S, Io>,
+            Response = (),
+            Error = FramedError<Io>,
+        > + 'static,
 {
     type Factory = FramedRouteFactory<Io, T, S>;
 
@@ -105,12 +116,16 @@ pub struct FramedRouteFactory<Io, T, S> {
 
 impl<Io, T, S> NewService for FramedRouteFactory<Io, T, S>
 where
-    T: NewService<Request = FramedRequest<S, Framed<Io, Codec>>, Response = ()>
-        + 'static,
+    Io: AsyncRead + AsyncWrite + 'static,
+    T: NewService<
+            Request = FramedRequest<S, Io>,
+            Response = (),
+            Error = FramedError<Io>,
+        > + 'static,
 {
     type Request = (Request, Framed<Io, Codec>);
     type Response = T::Response;
-    type Error = T::Error;
+    type Error = ();
     type InitError = T::InitError;
     type Service = FramedRouteService<Io, T::Service, S>;
     type Future = CreateRouteService<Io, T, S>;
@@ -138,7 +153,7 @@ pub struct CreateRouteService<Io, T: NewService, S> {
 
 impl<Io, T, S> Future for CreateRouteService<Io, T, S>
 where
-    T: NewService<Request = FramedRequest<S, Framed<Io, Codec>>, Response = ()>,
+    T: NewService<Request = FramedRequest<S, Io>, Response = ()>,
 {
     type Item = FramedRouteService<Io, T::Service, S>;
     type Error = T::InitError;
@@ -168,30 +183,40 @@ pub struct FramedRouteService<Io, T, S> {
 
 impl<Io, T, S> Service for FramedRouteService<Io, T, S>
 where
-    T: Service<Request = FramedRequest<S, Framed<Io, Codec>>, Response = ()> + 'static,
+    Io: AsyncRead + AsyncWrite + 'static,
+    T: Service<Request = FramedRequest<S, Io>, Response = (), Error = FramedError<Io>>
+        + 'static,
 {
     type Request = (Request, Framed<Io, Codec>);
     type Response = ();
-    type Error = T::Error;
-    type Future = T::Future;
+    type Error = ();
+    type Future = FramedRouteServiceResponse<Io, T::Future>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.service.poll_ready()
+        self.service.poll_ready().map_err(|e| {
+            debug!("Service not available: {}", e.err);
+            ()
+        })
     }
 
     fn call(&mut self, (req, framed): Self::Request) -> Self::Future {
-        self.service.call(FramedRequest::new(
-            WebRequest::new(self.state.clone(), req, Params::new()),
-            framed,
-        ))
+        FramedRouteServiceResponse {
+            fut: self.service.call(FramedRequest::new(
+                WebRequest::new(self.state.clone(), req, Params::new()),
+                framed,
+            )),
+            send: None,
+            _t: PhantomData,
+        }
     }
 }
 
 impl<Io, T, S> HttpService for FramedRouteService<Io, T, S>
 where
-    Io: 'static,
+    Io: AsyncRead + AsyncWrite + 'static,
     S: 'static,
-    T: Service<Request = FramedRequest<S, Framed<Io, Codec>>, Response = ()> + 'static,
+    T: Service<Request = FramedRequest<S, Io>, Response = (), Error = FramedError<Io>>
+        + 'static,
 {
     fn handle(
         &mut self, (req, framed): Self::Request,
@@ -200,13 +225,57 @@ where
             || !self.methods.is_empty() && self.methods.contains(req.method())
         {
             if let Some(params) = self.pattern.match_with_params(&req, 0) {
-                return Ok(self.service.call(FramedRequest::new(
-                    WebRequest::new(self.state.clone(), req, params),
-                    framed,
-                )));
+                return Ok(FramedRouteServiceResponse {
+                    fut: self.service.call(FramedRequest::new(
+                        WebRequest::new(self.state.clone(), req, params),
+                        framed,
+                    )),
+                    send: None,
+                    _t: PhantomData,
+                });
             }
         }
         Err((req, framed))
+    }
+}
+
+#[doc(hidden)]
+pub struct FramedRouteServiceResponse<Io, F> {
+    fut: F,
+    send: Option<Box<Future<Item = (), Error = Error>>>,
+    _t: PhantomData<Io>,
+}
+
+impl<Io, F> Future for FramedRouteServiceResponse<Io, F>
+where
+    F: Future<Error = FramedError<Io>>,
+    Io: AsyncRead + AsyncWrite + 'static,
+{
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if let Some(ref mut fut) = self.send {
+            return match fut.poll() {
+                Ok(Async::NotReady) => Ok(Async::NotReady),
+                Ok(Async::Ready(_)) => Ok(Async::Ready(())),
+                Err(e) => {
+                    debug!("Error during error response send: {}", e);
+                    Err(())
+                }
+            };
+        };
+
+        match self.fut.poll() {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Ok(Async::Ready(_)) => Ok(Async::Ready(())),
+            Err(e) => {
+                let res: Response = e.err.into();
+                self.send =
+                    Some(Box::new(e.framed.send(res.into()).from_err().map(|_| ())));
+                self.poll()
+            }
+        }
     }
 }
 
@@ -234,14 +303,14 @@ impl<Io, S> FramedRoutePatternBuilder<Io, S> {
 
     pub fn map<T, U, F: IntoNewService<T>>(
         self, md: F,
-    ) -> FramedRouteBuilder<Io, S, T, Framed<Io, Codec>, U>
+    ) -> FramedRouteBuilder<Io, S, T, (), U>
     where
         T: NewService<
-            Request = FramedRequest<S, Framed<Io, Codec>>,
-            Response = FramedRequest<S, U>,
+            Request = FramedRequest<S, Io>,
+            Response = FramedRequest<S, Io, U>,
+            Error = FramedError<Io>,
             InitError = (),
         >,
-        T::Error: Into<Error>,
     {
         FramedRouteBuilder {
             service: md.into_new_service(),
@@ -257,14 +326,15 @@ impl<Io, S> FramedRoutePatternBuilder<Io, S> {
     ) -> FramedRoute<
         Io,
         impl NewService<
-            Request = FramedRequest<S, Framed<Io, Codec>>,
+            Request = FramedRequest<S, Io>,
             Response = (),
+            Error = FramedError<Io>,
             InitError = (),
         >,
         S,
     >
     where
-        F: FramedFactory<S, P, Framed<Io, Codec>, R, E>,
+        F: FramedFactory<S, Io, (), P, R, E>,
         P: FromRequest<S> + 'static,
         R: IntoFuture<Item = (), Error = E>,
         E: Into<Error>,
@@ -291,9 +361,9 @@ pub struct FramedRouteBuilder<Io, S, T, U1, U2> {
 impl<Io, S, T, U1, U2> FramedRouteBuilder<Io, S, T, U1, U2>
 where
     T: NewService<
-        Request = FramedRequest<S, U1>,
-        Response = FramedRequest<S, U2>,
-        Error = Error,
+        Request = FramedRequest<S, Io, U1>,
+        Response = FramedRequest<S, Io, U2>,
+        Error = FramedError<Io>,
         InitError = (),
     >,
 {
@@ -318,9 +388,9 @@ where
         Io,
         S,
         impl NewService<
-            Request = FramedRequest<S, U1>,
-            Response = FramedRequest<S, U3>,
-            Error = K::Error,
+            Request = FramedRequest<S, Io, U1>,
+            Response = FramedRequest<S, Io, U3>,
+            Error = FramedError<Io>,
             InitError = (),
         >,
         U1,
@@ -328,11 +398,11 @@ where
     >
     where
         K: NewService<
-            Request = FramedRequest<S, U2>,
-            Response = FramedRequest<S, U3>,
+            Request = FramedRequest<S, Io, U2>,
+            Response = FramedRequest<S, Io, U3>,
+            Error = FramedError<Io>,
             InitError = (),
         >,
-        K::Error: From<T::Error>,
     {
         FramedRouteBuilder {
             service: self.service.from_err().and_then(md.into_new_service()),
@@ -348,15 +418,15 @@ where
     ) -> FramedRoute<
         Io,
         impl NewService<
-            Request = FramedRequest<S, U1>,
+            Request = FramedRequest<S, Io, U1>,
             Response = (),
-            Error = Error,
+            Error = FramedError<Io>,
             InitError = (),
         >,
         S,
     >
     where
-        F: FramedFactory<S, P, U2, R, E>,
+        F: FramedFactory<S, Io, U2, P, R, E>,
         P: FromRequest<S> + 'static,
         R: IntoFuture<Item = (), Error = E>,
         E: Into<Error>,
@@ -365,8 +435,7 @@ where
             service: self
                 .service
                 .and_then(FramedExtract::new(P::Config::default()))
-                .and_then(FramedHandle::new(handler))
-                .map_err(Error::from),
+                .and_then(FramedHandle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
             headers: self.headers,
