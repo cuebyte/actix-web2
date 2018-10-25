@@ -247,6 +247,7 @@ impl TestServer {
 
             Server::default()
                 .listen("test", tcp, factory)
+                .workers(1)
                 .disable_signals()
                 .start();
 
