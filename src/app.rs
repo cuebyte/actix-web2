@@ -33,6 +33,10 @@ impl<S> State<S> {
     pub fn new(state: S) -> State<S> {
         State(Rc::new(state))
     }
+
+    pub fn get_ref(&self) -> &S {
+        self.0.as_ref()
+    }
 }
 
 impl<S> Deref for State<S> {
