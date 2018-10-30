@@ -13,6 +13,7 @@ extern crate net2;
 extern crate regex;
 #[macro_use]
 extern crate serde;
+extern crate serde_json;
 extern crate serde_urlencoded;
 extern crate tokio;
 extern crate tokio_io;

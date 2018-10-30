@@ -11,6 +11,7 @@ use futures::{future, Async, Future, IntoFuture, Poll};
 use mime::Mime;
 use serde::de::{self, DeserializeOwned};
 use serde::Serialize;
+use serde_json;
 use serde_urlencoded;
 
 use actix_http::dev::{JsonBody, MessageBody, UrlEncoded};
@@ -109,7 +110,7 @@ impl<T> Path<T> {
     }
 
     /// Extract path information from a request
-    pub fn extract<S>(req: &Request<S>) -> Result<Path<T>, serde::de::value::Error>
+    pub fn extract<S>(req: &Request<S>) -> Result<Path<T>, de::value::Error>
     where
         T: DeserializeOwned,
     {
