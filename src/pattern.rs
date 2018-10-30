@@ -216,7 +216,9 @@ impl ResourcePattern {
 
     /// Is the given path a prefix match and do the parameters match against this resource?
     pub fn match_prefix_with_params(
-        &self, req: &Request, plen: usize,
+        &self,
+        req: &Request,
+        plen: usize,
     ) -> Option<Params> {
         let path = &req.path()[plen..];
         let path = if path.is_empty() { "/" } else { path };
@@ -341,7 +343,8 @@ impl ResourcePattern {
     }
 
     fn parse(
-        mut pattern: &str, for_prefix: bool,
+        mut pattern: &str,
+        for_prefix: bool,
     ) -> (String, Vec<PatternElement>, bool, usize) {
         if pattern.find('{').is_none() {
             return (

@@ -57,7 +57,10 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
     }
 
     fn deserialize_struct<V>(
-        self, _: &'static str, _: &'static [&'static str], visitor: V,
+        self,
+        _: &'static str,
+        _: &'static [&'static str],
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -73,7 +76,9 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
     }
 
     fn deserialize_unit_struct<V>(
-        self, _: &'static str, visitor: V,
+        self,
+        _: &'static str,
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -82,7 +87,9 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
     }
 
     fn deserialize_newtype_struct<V>(
-        self, _: &'static str, visitor: V,
+        self,
+        _: &'static str,
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -91,7 +98,9 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
     }
 
     fn deserialize_tuple<V>(
-        self, len: usize, visitor: V,
+        self,
+        len: usize,
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -112,7 +121,10 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
     }
 
     fn deserialize_tuple_struct<V>(
-        self, _: &'static str, len: usize, visitor: V,
+        self,
+        _: &'static str,
+        len: usize,
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -133,7 +145,10 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
     }
 
     fn deserialize_enum<V>(
-        self, _: &'static str, _: &'static [&'static str], _: V,
+        self,
+        _: &'static str,
+        _: &'static [&'static str],
+        _: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -297,7 +312,9 @@ impl<'de> Deserializer<'de> for Value<'de> {
     }
 
     fn deserialize_unit_struct<V>(
-        self, _: &'static str, visitor: V,
+        self,
+        _: &'static str,
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -327,7 +344,10 @@ impl<'de> Deserializer<'de> for Value<'de> {
     }
 
     fn deserialize_enum<V>(
-        self, _: &'static str, _: &'static [&'static str], visitor: V,
+        self,
+        _: &'static str,
+        _: &'static [&'static str],
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -336,7 +356,9 @@ impl<'de> Deserializer<'de> for Value<'de> {
     }
 
     fn deserialize_newtype_struct<V>(
-        self, _: &'static str, visitor: V,
+        self,
+        _: &'static str,
+        visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -352,7 +374,10 @@ impl<'de> Deserializer<'de> for Value<'de> {
     }
 
     fn deserialize_struct<V>(
-        self, _: &'static str, _: &'static [&'static str], _: V,
+        self,
+        _: &'static str,
+        _: &'static [&'static str],
+        _: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -361,7 +386,10 @@ impl<'de> Deserializer<'de> for Value<'de> {
     }
 
     fn deserialize_tuple_struct<V>(
-        self, _: &'static str, _: usize, _: V,
+        self,
+        _: &'static str,
+        _: usize,
+        _: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
@@ -433,7 +461,9 @@ impl<'de> de::VariantAccess<'de> for UnitVariant {
     }
 
     fn struct_variant<V>(
-        self, _: &'static [&'static str], _: V,
+        self,
+        _: &'static [&'static str],
+        _: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,

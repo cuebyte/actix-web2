@@ -7,7 +7,9 @@ use actix_http::{Error, Request, Response};
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
 
 use super::app::{HttpService, HttpServiceFactory, State};
-use super::handler::{AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle};
+use super::handler::{
+    AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, ServiceRequest,
+};
 use super::param::Params;
 use super::pattern::ResourcePattern;
 use super::request::Request as WebRequest;
@@ -49,7 +51,7 @@ impl<S> Route<(), S> {
 
 impl<T, S> Route<T, S>
 where
-    T: NewService<Request = WebRequest<S>, Response = Response> + 'static,
+    T: NewService<Request = ServiceRequest<S>, Response = Response> + 'static,
 {
     pub fn new<F: IntoNewService<T>>(pattern: ResourcePattern, factory: F) -> Self {
         Route {
@@ -74,7 +76,7 @@ where
 
 impl<T, S> HttpServiceFactory<S> for Route<T, S>
 where
-    T: NewService<Request = WebRequest<S>, Response = Response> + 'static,
+    T: NewService<Request = ServiceRequest<S>, Response = Response> + 'static,
 {
     type Factory = RouteFactory<T, S>;
 
@@ -99,7 +101,7 @@ pub struct RouteFactory<T, S> {
 
 impl<T, S> NewService for RouteFactory<T, S>
 where
-    T: NewService<Request = WebRequest<S>, Response = Response> + 'static,
+    T: NewService<Request = ServiceRequest<S>, Response = Response> + 'static,
 {
     type Request = Request;
     type Response = T::Response;
@@ -129,7 +131,7 @@ pub struct CreateRouteService<T: NewService, S> {
 
 impl<T, S> Future for CreateRouteService<T, S>
 where
-    T: NewService<Request = WebRequest<S>, Response = Response>,
+    T: NewService<Request = ServiceRequest<S>, Response = Response>,
 {
     type Item = RouteService<T::Service, S>;
     type Error = T::InitError;
@@ -157,7 +159,7 @@ pub struct RouteService<T, S> {
 
 impl<T, S> Service for RouteService<T, S>
 where
-    T: Service<Request = WebRequest<S>, Response = Response> + 'static,
+    T: Service<Request = ServiceRequest<S>, Response = Response> + 'static,
 {
     type Request = Request;
     type Response = T::Response;
@@ -169,14 +171,17 @@ where
     }
 
     fn call(&mut self, req: Self::Request) -> Self::Future {
-        self.service
-            .call(WebRequest::new(self.state.clone(), req, Params::new()))
+        self.service.call(ServiceRequest::new(WebRequest::new(
+            self.state.clone(),
+            req,
+            Params::new(),
+        )))
     }
 }
 
 impl<T, S> HttpService for RouteService<T, S>
 where
-    T: Service<Request = WebRequest<S>, Response = Response> + 'static,
+    T: Service<Request = ServiceRequest<S>, Response = Response> + 'static,
     S: 'static,
 {
     fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {
@@ -184,11 +189,11 @@ where
             || !self.methods.is_empty() && self.methods.contains(req.method())
         {
             if let Some(params) = self.pattern.match_with_params(&req, 0) {
-                return Ok(self.service.call(WebRequest::new(
+                return Ok(self.service.call(ServiceRequest::new(WebRequest::new(
                     self.state.clone(),
                     req,
                     params,
-                )));
+                ))));
             }
         }
         Err(req)
@@ -217,9 +222,13 @@ impl<S> RoutePatternBuilder<S> {
         self
     }
 
-    pub fn map<T, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S>
+    pub fn map<T, U, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S, (), U>
     where
-        T: NewService<Request = WebRequest<S>, Response = WebRequest<S>, InitError = ()>,
+        T: NewService<
+            Request = ServiceRequest<S>,
+            Response = ServiceRequest<S, U>,
+            InitError = (),
+        >,
     {
         RouteBuilder {
             service: md.into_new_service(),
@@ -231,10 +240,11 @@ impl<S> RoutePatternBuilder<S> {
     }
 
     pub fn finish<F, P, R>(
-        self, handler: F,
+        self,
+        handler: F,
     ) -> Route<
         impl NewService<
-            Request = WebRequest<S>,
+            Request = ServiceRequest<S>,
             Response = Response,
             Error = Error,
             InitError = (),
@@ -242,7 +252,7 @@ impl<S> RoutePatternBuilder<S> {
         S,
     >
     where
-        F: Factory<S, P, R> + 'static,
+        F: Factory<S, (), P, R> + 'static,
         P: FromRequest<S> + 'static,
         R: Responder<S> + 'static,
     {
@@ -256,10 +266,11 @@ impl<S> RoutePatternBuilder<S> {
     }
 
     pub fn with<F, P, R, I, E>(
-        self, handler: F,
+        self,
+        handler: F,
     ) -> Route<
         impl NewService<
-            Request = WebRequest<S>,
+            Request = ServiceRequest<S>,
             Response = Response,
             Error = Error,
             InitError = (),
@@ -267,7 +278,7 @@ impl<S> RoutePatternBuilder<S> {
         S,
     >
     where
-        F: AsyncFactory<S, P, R, I, E>,
+        F: AsyncFactory<S, (), P, R, I, E>,
         P: FromRequest<S> + 'static,
         R: IntoFuture<Item = I, Error = E>,
         I: Into<Response>,
@@ -284,19 +295,19 @@ impl<S> RoutePatternBuilder<S> {
     }
 }
 
-pub struct RouteBuilder<T, S> {
+pub struct RouteBuilder<T, S, U1, U2> {
     service: T,
     pattern: ResourcePattern,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
-    state: PhantomData<S>,
+    state: PhantomData<(S, U1, U2)>,
 }
 
-impl<T, S> RouteBuilder<T, S>
+impl<T, S, U1, U2> RouteBuilder<T, S, U1, U2>
 where
     T: NewService<
-        Request = WebRequest<S>,
-        Response = WebRequest<S>,
+        Request = ServiceRequest<S, U1>,
+        Response = ServiceRequest<S, U2>,
         Error = Error,
         InitError = (),
     >,
@@ -316,23 +327,32 @@ where
         self
     }
 
-    pub fn map<U, F: IntoNewService<U>>(
-        self, md: F,
+    pub fn map<T1, U3, F: IntoNewService<T1>>(
+        self,
+        md: F,
     ) -> RouteBuilder<
         impl NewService<
-            Request = WebRequest<S>,
-            Response = WebRequest<S>,
-            Error = U::Error,
+            Request = ServiceRequest<S, U1>,
+            Response = ServiceRequest<S, U3>,
+            Error = Error,
             InitError = (),
         >,
         S,
+        U1,
+        U2,
     >
     where
-        U: NewService<Request = WebRequest<S>, Response = WebRequest<S>, InitError = ()>,
-        U::Error: From<T::Error>,
+        T1: NewService<
+            Request = ServiceRequest<S, U2>,
+            Response = ServiceRequest<S, U3>,
+            InitError = (),
+        >,
+        T1::Error: Into<Error>,
     {
         RouteBuilder {
-            service: self.service.from_err().and_then(md.into_new_service()),
+            service: self
+                .service
+                .and_then(md.into_new_service().map_err(|e| e.into())),
             pattern: self.pattern,
             methods: self.methods,
             headers: self.headers,
@@ -341,10 +361,11 @@ where
     }
 
     pub fn with<F, P, R, I, E>(
-        self, handler: F,
+        self,
+        handler: F,
     ) -> Route<
         impl NewService<
-            Request = WebRequest<S>,
+            Request = ServiceRequest<S, U1>,
             Response = Response,
             Error = Error,
             InitError = (),
@@ -352,7 +373,7 @@ where
         S,
     >
     where
-        F: AsyncFactory<S, P, R, I, E>,
+        F: AsyncFactory<S, U2, P, R, I, E>,
         P: FromRequest<S> + 'static,
         R: IntoFuture<Item = I, Error = E>,
         I: Into<Response>,
@@ -371,10 +392,11 @@ where
     }
 
     pub fn finish<F, P, R>(
-        self, handler: F,
+        self,
+        handler: F,
     ) -> Route<
         impl NewService<
-            Request = WebRequest<S>,
+            Request = ServiceRequest<S, U1>,
             Response = Response,
             Error = Error,
             InitError = (),
@@ -382,7 +404,7 @@ where
         S,
     >
     where
-        F: Factory<S, P, R> + 'static,
+        F: Factory<S, U2, P, R> + 'static,
         P: FromRequest<S> + 'static,
         R: Responder<S> + 'static,
     {

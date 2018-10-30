@@ -219,7 +219,8 @@ where
         + 'static,
 {
     fn handle(
-        &mut self, (req, framed): Self::Request,
+        &mut self,
+        (req, framed): Self::Request,
     ) -> Result<Self::Future, Self::Request> {
         if self.methods.is_empty()
             || !self.methods.is_empty() && self.methods.contains(req.method())
@@ -302,7 +303,8 @@ impl<Io, S> FramedRoutePatternBuilder<Io, S> {
     }
 
     pub fn map<T, U, F: IntoNewService<T>>(
-        self, md: F,
+        self,
+        md: F,
     ) -> FramedRouteBuilder<Io, S, T, (), U>
     where
         T: NewService<
@@ -322,7 +324,8 @@ impl<Io, S> FramedRoutePatternBuilder<Io, S> {
     }
 
     pub fn with<F, P, R, E>(
-        self, handler: F,
+        self,
+        handler: F,
     ) -> FramedRoute<
         Io,
         impl NewService<
@@ -383,7 +386,8 @@ where
     }
 
     pub fn map<K, U3, F: IntoNewService<K>>(
-        self, md: F,
+        self,
+        md: F,
     ) -> FramedRouteBuilder<
         Io,
         S,
@@ -414,7 +418,8 @@ where
     }
 
     pub fn with<F, P, R, E>(
-        self, handler: F,
+        self,
+        handler: F,
     ) -> FramedRoute<
         Io,
         impl NewService<

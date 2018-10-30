@@ -273,7 +273,7 @@ macro_rules! factory_tuple ({ ($(($nex:tt, $Ex:ident)),+), $(($n:tt, $T:ident)),
           Res: IntoFuture<Item=(), Error=Err> + 'static,
           Err: Into<Error>,
     {
-        fn call(&self, framed: Framed<Io, Codec>, param: ($($T,)+), extra: ($($Ex,)+) ) -> Res {
+        fn call(&self, framed: Framed<Io, Codec>, param: ($($T,)+), extra: ($($Ex,)+)) -> Res {
             (self)(framed, $(extra.$nex,)+ $(param.$n,)+)
         }
     }
