@@ -332,7 +332,8 @@ impl TestServer {
 
     /// Connect to websocket server at a given path
     pub fn ws_at(
-        &mut self, path: &str,
+        &mut self,
+        path: &str,
     ) -> Result<(ws::ClientReader, ws::ClientWriter), ws::ClientError> {
         let url = self.url(path);
         self.rt

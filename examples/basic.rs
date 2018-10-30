@@ -36,7 +36,7 @@ fn main() {
             h1::H1Service::new(
                 App::new()
                     .service(Route::build("/resource1/index.html").finish(index))
-                    .service(Route::build("/resource2/index.html").async(index_async))
+                    .service(Route::build("/resource2/index.html").with(index_async))
                     .service(Route::build("/test1.html").finish(|| "Test\r\n"))
                     .service(Route::build("/").finish(no_params)),
             ).map(|_| ())
