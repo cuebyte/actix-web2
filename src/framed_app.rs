@@ -2,11 +2,11 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use actix_http::h1::Codec;
-use actix_http::{Request, Response};
+use actix_http::{Request, Response, SendResponse};
 use actix_net::cloneable::CloneableService;
 use actix_net::codec::Framed;
 use actix_net::service::{IntoNewService, NewService, Service};
-use futures::{Async, Future, Poll, Sink};
+use futures::{Async, Future, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 use app::{HttpService, HttpServiceFactory, State};
@@ -230,8 +230,7 @@ where
         }
         // self.default.call(req)
         Box::new(
-            req.1
-                .send(Response::NotFound().finish().into())
+            SendResponse::send(req.1, Response::NotFound().finish().into())
                 .map(|_| ())
                 .map_err(|_| ()),
         )

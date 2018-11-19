@@ -1,10 +1,10 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, IntoFuture, Poll, Sink};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use actix_http::h1::Codec;
 use actix_http::http::{HeaderName, HeaderValue, Method};
-use actix_http::{Error, Request, Response};
+use actix_http::{Error, Request};
 use actix_net::codec::Framed;
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -271,10 +271,8 @@ where
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(_)) => Ok(Async::Ready(())),
             Err(e) => {
-                let res: Response = e.err.into();
-                self.send =
-                    Some(Box::new(e.framed.send(res.into()).from_err().map(|_| ())));
-                self.poll()
+                error!("Error occurred during request handling: {}", e.err);
+                Err(())
             }
         }
     }

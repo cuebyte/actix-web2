@@ -1,22 +1,27 @@
 //! Various helpers for Actix applications to use during testing.
+use std::marker::PhantomData;
 use std::str::FromStr;
 use std::{net, sync::mpsc, thread};
 
+use bytes::Bytes;
 use futures::{Future, IntoFuture};
 use http::header::HeaderName;
 use http::{HeaderMap, HttpTryFrom, Method, Uri, Version};
 use net2::TcpBuilder;
 use tokio::runtime::current_thread::Runtime;
+use tokio_io::{AsyncRead, AsyncWrite};
 
-use actix::{Actor, Addr, System};
+use actix::System;
+use actix_net::codec::Framed;
 use actix_net::server::{Server, StreamServiceFactory};
-use actix_web::client::{ClientConnector, ClientRequest, ClientRequestBuilder};
-use actix_web::ws;
+use actix_net::service::Service;
 
+use actix_http::client::{
+    ClientRequest, ClientRequestBuilder, Connect, Connection, Connector, ConnectorError,
+};
 use actix_http::dev::Payload;
 use actix_http::http::header::{Header, IntoHeaderValue};
-use actix_http::uri::Url as InnerUrl;
-use actix_http::Binary;
+use actix_http::ws;
 use actix_http::Request as HttpRequest;
 
 use app::State;
@@ -158,10 +163,9 @@ impl<S: 'static> TestRequest<S> {
     }
 
     /// Set request payload
-    pub fn set_payload<B: Into<Binary>>(mut self, data: B) -> Self {
-        let mut data = data.into();
+    pub fn set_payload<B: Into<Bytes>>(mut self, data: B) -> Self {
         let mut payload = Payload::empty();
-        payload.unread_data(data.take());
+        payload.unread_data(data.into());
         self.payload = Some(payload);
         self
     }
@@ -178,16 +182,17 @@ impl<S: 'static> TestRequest<S> {
             payload,
         } = self;
 
+        params.set_uri(&uri);
+
         let mut req = HttpRequest::new();
         {
             let inner = req.inner_mut();
-            inner.method = method;
-            inner.url = InnerUrl::new(uri);
-            inner.version = version;
-            inner.headers = headers;
+            inner.head.uri = uri;
+            inner.head.method = method;
+            inner.head.version = version;
+            inner.head.headers = headers;
             *inner.payload.borrow_mut() = payload;
         }
-        params.set_url(req.url().clone());
 
         Request::new(State::new(state), req, params)
     }
@@ -228,15 +233,21 @@ impl<S: 'static> TestRequest<S> {
 /// assert!(response.status().is_success());
 /// # }
 /// ```
-pub struct TestServer {
+pub struct TestServer<T = (), C = ()> {
     addr: net::SocketAddr,
-    conn: Addr<ClientConnector>,
+    conn: T,
     rt: Runtime,
+    _t: PhantomData<C>,
 }
 
-impl TestServer {
+impl TestServer<(), ()> {
     /// Start new test server with application factory
-    pub fn with_factory<F: StreamServiceFactory>(factory: F) -> Self {
+    pub fn with_factory<F: StreamServiceFactory>(
+        factory: F,
+    ) -> TestServer<
+        impl Service<Request = Connect, Response = impl Connection, Error = ConnectorError>
+            + Clone,
+    > {
         let (tx, rx) = mpsc::channel();
 
         // run server in separate thread
@@ -251,45 +262,34 @@ impl TestServer {
                 .disable_signals()
                 .start();
 
-            tx.send((System::current(), local_addr, TestServer::get_conn()))
-                .unwrap();
+            tx.send((System::current(), local_addr)).unwrap();
             sys.run();
         });
 
-        let (system, addr, conn) = rx.recv().unwrap();
+        let (system, addr) = rx.recv().unwrap();
         System::set_current(system);
         TestServer {
             addr,
-            conn,
+            conn: TestServer::new_connector(),
             rt: Runtime::new().unwrap(),
+            _t: PhantomData,
         }
     }
 
-    fn get_conn() -> Addr<ClientConnector> {
-        #[cfg(any(feature = "alpn", feature = "ssl"))]
+    fn new_connector(
+) -> impl Service<Request = Connect, Response = impl Connection, Error = ConnectorError>
+             + Clone {
+        #[cfg(feature = "ssl")]
         {
             use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
             let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
             builder.set_verify(SslVerifyMode::NONE);
-            ClientConnector::with_connector(builder.build()).start()
+            Connector::default().ssl(builder.build()).service()
         }
-        #[cfg(all(
-            feature = "rust-tls",
-            not(any(feature = "alpn", feature = "ssl"))
-        ))]
+        #[cfg(not(feature = "ssl"))]
         {
-            use rustls::ClientConfig;
-            use std::fs::File;
-            use std::io::BufReader;
-            let mut config = ClientConfig::new();
-            let pem_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
-            config.root_store.add_pem_file(pem_file).unwrap();
-            ClientConnector::with_connector(config).start()
-        }
-        #[cfg(not(any(feature = "alpn", feature = "ssl", feature = "rust-tls")))]
-        {
-            ClientConnector::default().start()
+            Connector::default().service()
         }
     }
 
@@ -301,6 +301,16 @@ impl TestServer {
         socket.reuse_address(true).unwrap();
         let tcp = socket.to_tcp_listener().unwrap();
         tcp.local_addr().unwrap()
+    }
+}
+
+impl<T, C> TestServer<T, C> {
+    /// Execute future on current core
+    pub fn block_on<F, I, E>(&mut self, fut: F) -> Result<I, E>
+    where
+        F: Future<Item = I, Error = E>,
+    {
+        self.rt.block_on(fut)
     }
 
     /// Construct test server url
@@ -317,33 +327,36 @@ impl TestServer {
         }
     }
 
+    /// Http connector
+    pub fn connector(&mut self) -> &mut T {
+        &mut self.conn
+    }
+
     /// Stop http server
     fn stop(&mut self) {
         System::current().stop();
     }
+}
 
-    /// Execute future on current core
-    pub fn execute<F, I, E>(&mut self, fut: F) -> Result<I, E>
-    where
-        F: Future<Item = I, Error = E>,
-    {
-        self.rt.block_on(fut)
-    }
-
+impl<T, C> TestServer<T, C>
+where
+    T: Service<Request = Connect, Response = C, Error = ConnectorError> + Clone,
+    C: Connection,
+{
     /// Connect to websocket server at a given path
     pub fn ws_at(
         &mut self,
         path: &str,
-    ) -> Result<(ws::ClientReader, ws::ClientWriter), ws::ClientError> {
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite, ws::Codec>, ws::ClientError> {
         let url = self.url(path);
         self.rt
-            .block_on(ws::Client::with_connector(url, self.conn.clone()).connect())
+            .block_on(ws::Client::default().call(ws::Connect::new(url)))
     }
 
     /// Connect to a websocket server
     pub fn ws(
         &mut self,
-    ) -> Result<(ws::ClientReader, ws::ClientWriter), ws::ClientError> {
+    ) -> Result<Framed<impl AsyncRead + AsyncWrite, ws::Codec>, ws::ClientError> {
         self.ws_at("/")
     }
 
@@ -367,12 +380,11 @@ impl TestServer {
         ClientRequest::build()
             .method(meth)
             .uri(self.url(path).as_str())
-            .with_connector(self.conn.clone())
             .take()
     }
 }
 
-impl Drop for TestServer {
+impl<T, C> Drop for TestServer<T, C> {
     fn drop(&mut self) {
         self.stop()
     }
