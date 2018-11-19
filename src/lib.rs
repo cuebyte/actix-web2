@@ -8,7 +8,6 @@ extern crate futures;
 #[macro_use]
 extern crate log;
 extern crate mime;
-extern crate net2;
 extern crate regex;
 #[macro_use]
 extern crate lazy_static;

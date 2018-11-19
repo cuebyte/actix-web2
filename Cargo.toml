@@ -28,7 +28,6 @@ actix-net = "0.2.3"
 actix-http = { git = "https://github.com/fafhrd91/actix-http.git" }
 #actix-http = { path = "../actix-http" }
 
-net2 = "0.2"
 bytes = "0.4"
 futures = "0.1"
 log = "0.4"
