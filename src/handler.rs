@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use actix_http::{Error, Response};
 use actix_net::service::{NewService, Service};
-use futures::future::{ok, FutureResult};
+use futures::future::{ok, Either, FutureResult};
 use futures::{Async, Future, IntoFuture, Poll};
 
 use request::Request;
@@ -213,7 +213,7 @@ where
     I: Into<Response>,
     E: Into<Error>,
 {
-    type Request = (T, ServiceRequest<S, Ex>);
+    type Request = Result<(T, ServiceRequest<S, Ex>), Error>;
     type Response = Response;
     type Error = Error;
     type InitError = ();
@@ -247,18 +247,26 @@ where
     I: Into<Response>,
     E: Into<Error>,
 {
-    type Request = (T, ServiceRequest<S, Ex>);
+    type Request = Result<(T, ServiceRequest<S, Ex>), Error>;
     type Response = Response;
     type Error = Error;
-    type Future = AsyncHandleServiceResponse<R::Future>;
+    type Future =
+        Either<AsyncHandleServiceResponse<R::Future>, FutureResult<Response, Error>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, (param, req): Self::Request) -> Self::Future {
-        let (_, extra) = req.into_parts();
-        AsyncHandleServiceResponse::new(self.hnd.call(param, extra).into_future())
+    fn call(&mut self, req: Self::Request) -> Self::Future {
+        match req {
+            Ok((param, req)) => {
+                let (_, extra) = req.into_parts();
+                Either::A(AsyncHandleServiceResponse::new(
+                    self.hnd.call(param, extra).into_future(),
+                ))
+            }
+            Err(e) => Either::B(ok(Response::from(e).into_body())),
+        }
     }
 }
 
