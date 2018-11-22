@@ -1,7 +1,6 @@
 extern crate actix;
 extern crate actix_http;
 extern crate actix_net;
-extern crate actix_web;
 extern crate bytes;
 extern crate encoding;
 #[macro_use]
@@ -9,8 +8,9 @@ extern crate futures;
 #[macro_use]
 extern crate log;
 extern crate mime;
-extern crate net2;
 extern crate regex;
+#[macro_use]
+extern crate lazy_static;
 #[macro_use]
 extern crate serde;
 extern crate serde_json;
@@ -29,6 +29,7 @@ mod request;
 mod responder;
 mod route;
 pub mod test;
+mod url;
 
 mod framed_app;
 mod framed_handler;

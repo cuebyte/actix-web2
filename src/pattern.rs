@@ -177,11 +177,11 @@ impl ResourcePattern {
             PatternType::Static(ref s) => if s != path {
                 None
             } else {
-                Some(Params::with_url(req.url()))
+                Some(Params::with_uri(req.uri()))
             },
             PatternType::Dynamic(ref re, ref names, _) => {
                 if let Some(captures) = re.captures(path) {
-                    let mut params = Params::with_url(req.url());
+                    let mut params = Params::with_uri(req.uri());
                     let mut idx = 0;
                     let mut passed = false;
                     for capture in captures.iter() {
@@ -209,7 +209,7 @@ impl ResourcePattern {
             PatternType::Prefix(ref s) => if !path.starts_with(s) {
                 None
             } else {
-                Some(Params::with_url(req.url()))
+                Some(Params::with_uri(req.uri()))
             },
         }
     }
@@ -225,7 +225,7 @@ impl ResourcePattern {
 
         match self.tp {
             PatternType::Static(ref s) => if s == path {
-                let mut params = Params::with_url(req.url());
+                let mut params = Params::with_uri(req.uri());
                 params.set_tail(req.path().len() as u16);
                 Some(params)
             } else {
@@ -233,7 +233,7 @@ impl ResourcePattern {
             },
             PatternType::Dynamic(ref re, ref names, len) => {
                 if let Some(captures) = re.captures(path) {
-                    let mut params = Params::with_url(req.url());
+                    let mut params = Params::with_uri(req.uri());
                     let mut pos = 0;
                     let mut passed = false;
                     let mut idx = 0;
@@ -275,7 +275,7 @@ impl ResourcePattern {
                 } else {
                     return None;
                 };
-                let mut params = Params::with_url(req.url());
+                let mut params = Params::with_uri(req.uri());
                 params.set_tail(min(req.path().len(), plen + len) as u16);
                 Some(params)
             }

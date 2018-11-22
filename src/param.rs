@@ -2,7 +2,9 @@
 use std::ops::Index;
 use std::rc::Rc;
 
-use actix_http::uri::Url;
+use actix_http::http::Uri;
+
+use url::Url;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ParamItem {
@@ -29,9 +31,9 @@ impl Params {
         }
     }
 
-    pub(crate) fn with_url(url: &Url) -> Params {
+    pub(crate) fn with_uri(uri: &Uri) -> Params {
         Params {
-            url: url.clone(),
+            url: Url::new(uri.clone()),
             tail: 0,
             segments: Vec::new(),
         }
@@ -45,8 +47,8 @@ impl Params {
         self.tail = tail;
     }
 
-    pub(crate) fn set_url(&mut self, url: Url) {
-        self.url = url;
+    pub(crate) fn set_uri(&mut self, uri: &Uri) {
+        self.url.update(uri);
     }
 
     pub(crate) fn add(&mut self, name: Rc<String>, value: ParamItem) {

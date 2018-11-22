@@ -285,8 +285,7 @@ impl<S> RoutePatternBuilder<S> {
         E: Into<Error>,
     {
         Route {
-            service: Extract::new(P::Config::default())
-                .and_then(AsyncHandle::new(handler)),
+            service: Extract::new(P::Config::default()).then(AsyncHandle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
             headers: self.headers,
@@ -383,7 +382,7 @@ where
             service: self
                 .service
                 .and_then(Extract::new(P::Config::default()))
-                .and_then(AsyncHandle::new(handler)),
+                .then(AsyncHandle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
             headers: self.headers,
