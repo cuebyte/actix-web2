@@ -43,11 +43,14 @@ impl<T: 'static, S> FramedApp<T, S> {
 
     pub fn service<U>(mut self, factory: U) -> Self
     where
-        U: HttpServiceFactory<S>,
-        U::Factory: NewService<Request = FramedRequest<T>, Response = ()> + 'static,
-        <U::Factory as NewService>::Future: 'static,
-        <U::Factory as NewService>::Service: HttpService,
-        <<U::Factory as NewService>::Service as Service>::Future: 'static,
+        U: HttpServiceFactory<S, FramedRequest<T>>,
+        U::Factory: NewService<FramedRequest<T>, Response = ()> + 'static,
+        <U::Factory as NewService<FramedRequest<T>>>::Future: 'static,
+        <U::Factory as NewService<FramedRequest<T>>>::Service:
+            HttpService<FramedRequest<T>>,
+        <<U::Factory as NewService<FramedRequest<T>>>::Service as Service<
+            FramedRequest<T>,
+        >>::Future: 'static,
     {
         self.services.push(Box::new(HttpNewService::new(
             factory.create(self.state.clone()),
@@ -57,11 +60,14 @@ impl<T: 'static, S> FramedApp<T, S> {
 
     pub fn register_service<U>(&mut self, factory: U)
     where
-        U: HttpServiceFactory<S>,
-        U::Factory: NewService<Request = FramedRequest<T>, Response = ()> + 'static,
-        <U::Factory as NewService>::Future: 'static,
-        <U::Factory as NewService>::Service: HttpService,
-        <<U::Factory as NewService>::Service as Service>::Future: 'static,
+        U: HttpServiceFactory<S, FramedRequest<T>>,
+        U::Factory: NewService<FramedRequest<T>, Response = ()> + 'static,
+        <U::Factory as NewService<FramedRequest<T>>>::Future: 'static,
+        <U::Factory as NewService<FramedRequest<T>>>::Service:
+            HttpService<FramedRequest<T>>,
+        <<U::Factory as NewService<FramedRequest<T>>>::Service as Service<
+            FramedRequest<T>,
+        >>::Future: 'static,
     {
         self.services.push(Box::new(HttpNewService::new(
             factory.create(self.state.clone()),
@@ -79,7 +85,8 @@ impl<T: 'static, S> FramedApp<T, S> {
     // }
 }
 
-impl<T: 'static, S> IntoNewService<FramedAppFactory<T>> for FramedApp<T, S>
+impl<T: 'static, S> IntoNewService<FramedAppFactory<T>, FramedRequest<T>>
+    for FramedApp<T, S>
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -99,11 +106,10 @@ pub struct FramedAppFactory<T> {
     _t: PhantomData<T>,
 }
 
-impl<T: 'static> NewService for FramedAppFactory<T>
+impl<T: 'static> NewService<FramedRequest<T>> for FramedAppFactory<T>
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Request = FramedRequest<T>;
     type Response = ();
     type Error = ();
     type InitError = ();
@@ -197,11 +203,10 @@ pub struct FramedAppService<T> {
     _t: PhantomData<T>,
 }
 
-impl<T: 'static> Service for FramedAppService<T>
+impl<T: 'static> Service<FramedRequest<T>> for FramedAppService<T>
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Request = FramedRequest<T>;
     type Response = ();
     type Error = ();
     type Future = BoxedResponse;
@@ -220,7 +225,7 @@ where
         }
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: FramedRequest<T>) -> Self::Future {
         let mut req = req;
         for item in &mut self.services {
             req = match item.handle(req) {

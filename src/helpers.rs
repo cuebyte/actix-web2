@@ -1,4 +1,6 @@
-use actix_http::Response;
+use std::marker::PhantomData;
+
+use actix_http::{Request, Response};
 use actix_net::service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Future, Poll};
@@ -7,7 +9,7 @@ use app::HttpService;
 
 pub(crate) type BoxedHttpService<Req, Res> = Box<
     HttpService<
-        Request = Req,
+        Req,
         Response = Res,
         Error = (),
         Future = Box<Future<Item = Res, Error = ()>>,
@@ -16,7 +18,7 @@ pub(crate) type BoxedHttpService<Req, Res> = Box<
 
 pub(crate) type BoxedHttpNewService<Req, Res> = Box<
     NewService<
-        Request = Req,
+        Req,
         Response = Res,
         Error = (),
         InitError = (),
@@ -25,59 +27,61 @@ pub(crate) type BoxedHttpNewService<Req, Res> = Box<
     >,
 >;
 
-pub(crate) struct HttpNewService<T: NewService>(T);
+pub(crate) struct HttpNewService<T: NewService<Request>, Request>(
+    T,
+    PhantomData<Request>,
+);
 
-impl<T> HttpNewService<T>
+impl<T, Request> HttpNewService<T, Request>
 where
-    T: NewService,
-    T::Request: 'static,
+    T: NewService<Request>,
     T::Response: 'static,
     T::Future: 'static,
-    T::Service: HttpService,
-    <T::Service as Service>::Future: 'static,
+    T::Service: HttpService<Request>,
+    <T::Service as Service<Request>>::Future: 'static,
 {
     pub fn new(service: T) -> Self {
-        HttpNewService(service)
+        HttpNewService(service, PhantomData)
     }
 }
 
-impl<T> NewService for HttpNewService<T>
+impl<T, Request> NewService<Request> for HttpNewService<T, Request>
 where
-    T: NewService,
-    T::Request: 'static,
+    T: NewService<Request>,
     T::Response: 'static,
     T::Future: 'static,
-    T::Service: HttpService,
-    <T::Service as Service>::Future: 'static,
+    T::Service: HttpService<Request>,
+    <T::Service as Service<Request>>::Future: 'static,
+    Request: 'static,
 {
-    type Request = T::Request;
     type Response = T::Response;
     type Error = ();
     type InitError = ();
-    type Service = BoxedHttpService<T::Request, T::Response>;
+    type Service = BoxedHttpService<Request, T::Response>;
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self) -> Self::Future {
         Box::new(self.0.new_service().map_err(|_| ()).and_then(|service| {
-            let service: BoxedHttpService<_, _> =
-                Box::new(HttpServiceWrapper { service });
+            let service: BoxedHttpService<_, _> = Box::new(HttpServiceWrapper {
+                service,
+                _t: PhantomData,
+            });
             Ok(service)
         }))
     }
 }
 
-struct HttpServiceWrapper<T: Service> {
+struct HttpServiceWrapper<T: Service<Request>, Request> {
     service: T,
+    _t: PhantomData<Request>,
 }
 
-impl<T> Service for HttpServiceWrapper<T>
+impl<T, Request> Service<Request> for HttpServiceWrapper<T, Request>
 where
-    T::Request: 'static,
     T::Response: 'static,
     T::Future: 'static,
-    T: Service + HttpService,
+    T: Service<Request> + HttpService<Request>,
 {
-    type Request = T::Request;
     type Response = T::Response;
     type Error = ();
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
@@ -86,17 +90,19 @@ where
         self.service.poll_ready().map_err(|_| ())
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: Request) -> Self::Future {
         Box::new(self.service.call(req).map_err(|_| ()))
     }
 }
 
-impl<T: HttpService> HttpService for HttpServiceWrapper<T>
+impl<T: HttpService<Request>, Request> HttpService<Request>
+    for HttpServiceWrapper<T, Request>
 where
     T::Future: 'static,
-    T: Service,
+    T: Service<Request>,
+    Request: 'static,
 {
-    fn handle(&mut self, req: Self::Request) -> Result<Self::Future, Self::Request> {
+    fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {
         match self.service.handle(req) {
             Ok(fut) => Ok(Box::new(fut.map_err(|_| ()))),
             Err(req) => Err(req),
@@ -108,71 +114,69 @@ pub(crate) fn not_found<Req>(_: Req) -> FutureResult<Response, ()> {
     ok(Response::NotFound().finish())
 }
 
-pub(crate) type HttpDefaultService<Req, Res> = Box<
+pub(crate) type HttpDefaultService<Res> = Box<
     Service<
-        Request = Req,
+        Request,
         Response = Res,
         Error = (),
         Future = Box<Future<Item = Res, Error = ()>>,
     >,
 >;
 
-pub(crate) type HttpDefaultNewService<Req, Res> = Box<
+pub(crate) type HttpDefaultNewService<Res> = Box<
     NewService<
-        Request = Req,
+        Request,
         Response = Res,
         Error = (),
         InitError = (),
-        Service = HttpDefaultService<Req, Res>,
-        Future = Box<Future<Item = HttpDefaultService<Req, Res>, Error = ()>>,
+        Service = HttpDefaultService<Res>,
+        Future = Box<Future<Item = HttpDefaultService<Res>, Error = ()>>,
     >,
 >;
 
-pub(crate) struct DefaultNewService<T: NewService>(T);
+pub(crate) struct DefaultNewService<T: NewService<Request>>(T);
 
 impl<T> DefaultNewService<T>
 where
-    T: NewService + 'static,
+    T: NewService<Request> + 'static,
     T::Future: 'static,
-    <T::Service as Service>::Future: 'static,
+    <T::Service as Service<Request>>::Future: 'static,
 {
     pub fn new(service: T) -> Self {
         DefaultNewService(service)
     }
 }
 
-impl<T> NewService for DefaultNewService<T>
+impl<T> NewService<Request> for DefaultNewService<T>
 where
-    T: NewService + 'static,
+    T: NewService<Request> + 'static,
     T::Future: 'static,
-    <T::Service as Service>::Future: 'static,
+    <T::Service as Service<Request>>::Future: 'static,
 {
-    type Request = T::Request;
     type Response = T::Response;
     type Error = ();
     type InitError = ();
-    type Service = HttpDefaultService<T::Request, T::Response>;
+    type Service = HttpDefaultService<T::Response>;
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self) -> Self::Future {
         Box::new(self.0.new_service().map_err(|_| ()).and_then(|service| {
-            let service: HttpDefaultService<_, _> =
+            let service: HttpDefaultService<_> =
                 Box::new(DefaultServiceWrapper { service });
             Ok(service)
         }))
     }
 }
 
-struct DefaultServiceWrapper<T: Service> {
+struct DefaultServiceWrapper<T: Service<Request>> {
     service: T,
 }
 
-impl<T> Service for DefaultServiceWrapper<T>
+impl<T> Service<Request> for DefaultServiceWrapper<T>
 where
     T::Future: 'static,
-    T: Service + 'static,
+    T: Service<Request> + 'static,
 {
-    type Request = T::Request;
     type Response = T::Response;
     type Error = ();
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
@@ -181,7 +185,7 @@ where
         self.service.poll_ready().map_err(|_| ())
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: Request) -> Self::Future {
         Box::new(self.service.call(req).map_err(|_| ()))
     }
 }

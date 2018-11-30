@@ -16,14 +16,14 @@ use request::Request as WebRequest;
 
 type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
 
-pub trait HttpServiceFactory<S> {
-    type Factory: NewService;
+pub trait HttpServiceFactory<S, Request> {
+    type Factory: NewService<Request>;
 
     fn create(self, state: State<S>) -> Self::Factory;
 }
 
-pub trait HttpService: Service + 'static {
-    fn handle(&mut self, req: Self::Request) -> Result<Self::Future, Self::Request>;
+pub trait HttpService<Request>: Service<Request> + 'static {
+    fn handle(&mut self, req: Request) -> Result<Self::Future, Request>;
 }
 
 /// Application state
@@ -67,7 +67,7 @@ impl<S> FromRequest<S> for State<S> {
 /// Application builder
 pub struct App<S = ()> {
     services: Vec<BoxedHttpNewService<Request, Response>>,
-    default: HttpDefaultNewService<Request, Response>,
+    default: HttpDefaultNewService<Response>,
     state: State<S>,
 }
 
@@ -92,11 +92,12 @@ impl<S> App<S> {
 
     pub fn service<T>(mut self, factory: T) -> Self
     where
-        T: HttpServiceFactory<S>,
-        T::Factory: NewService<Request = Request, Response = Response> + 'static,
-        <T::Factory as NewService>::Future: 'static,
-        <T::Factory as NewService>::Service: HttpService,
-        <<T::Factory as NewService>::Service as Service>::Future: 'static,
+        T: HttpServiceFactory<S, Request>,
+        T::Factory: NewService<Request, Response = Response> + 'static,
+        <T::Factory as NewService<Request>>::Future: 'static,
+        <T::Factory as NewService<Request>>::Service: HttpService<Request>,
+        <<T::Factory as NewService<Request>>::Service as Service<Request>>::Future:
+            'static,
     {
         self.services.push(Box::new(HttpNewService::new(
             factory.create(self.state.clone()),
@@ -104,18 +105,21 @@ impl<S> App<S> {
         self
     }
 
-    pub fn default_service<T, F: IntoNewService<T>>(mut self, factory: F) -> Self
+    pub fn default_service<T, F: IntoNewService<T, Request>>(
+        mut self,
+        factory: F,
+    ) -> Self
     where
-        T: NewService<Request = Request, Response = Response> + 'static,
+        T: NewService<Request, Response = Response> + 'static,
         T::Future: 'static,
-        <T::Service as Service>::Future: 'static,
+        <T::Service as Service<Request>>::Future: 'static,
     {
         self.default = Box::new(DefaultNewService::new(factory.into_new_service()));
         self
     }
 }
 
-impl<S> IntoNewService<AppFactory> for App<S> {
+impl<S> IntoNewService<AppFactory, Request> for App<S> {
     fn into_new_service(self) -> AppFactory {
         AppFactory {
             services: Rc::new(self.services),
@@ -127,11 +131,10 @@ impl<S> IntoNewService<AppFactory> for App<S> {
 #[derive(Clone)]
 pub struct AppFactory {
     services: Rc<Vec<BoxedHttpNewService<Request, Response>>>,
-    default: Rc<HttpDefaultNewService<Request, Response>>,
+    default: Rc<HttpDefaultNewService<Response>>,
 }
 
-impl NewService for AppFactory {
-    type Request = Request;
+impl NewService<Request> for AppFactory {
     type Response = Response;
     type Error = ();
     type InitError = ();
@@ -154,8 +157,8 @@ impl NewService for AppFactory {
 #[doc(hidden)]
 pub struct CreateService {
     fut: Vec<CreateServiceItem>,
-    default: Option<HttpDefaultService<Request, Response>>,
-    default_fut: Box<Future<Item = HttpDefaultService<Request, Response>, Error = ()>>,
+    default: Option<HttpDefaultService<Response>>,
+    default_fut: Box<Future<Item = HttpDefaultService<Response>, Error = ()>>,
 }
 
 enum CreateServiceItem {
@@ -216,11 +219,10 @@ impl Future for CreateService {
 
 pub struct AppService {
     services: Vec<BoxedHttpService<Request, Response>>,
-    default: HttpDefaultService<Request, Response>,
+    default: HttpDefaultService<Response>,
 }
 
-impl Service for AppService {
-    type Request = Request;
+impl Service<Request> for AppService {
     type Response = Response;
     type Error = ();
     type Future = BoxedResponse;
@@ -239,7 +241,7 @@ impl Service for AppService {
         }
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: Request) -> Self::Future {
         let mut req = req;
         for item in &mut self.services {
             req = match item.handle(req) {

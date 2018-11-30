@@ -108,12 +108,11 @@ where
         }
     }
 }
-impl<F, S, Ex, T, R> NewService for Handle<F, S, Ex, T, R>
+impl<F, S, Ex, T, R> NewService<(T, ServiceRequest<S, Ex>)> for Handle<F, S, Ex, T, R>
 where
     F: Factory<S, Ex, T, R>,
     R: Responder<S> + 'static,
 {
-    type Request = (T, ServiceRequest<S, Ex>);
     type Response = Response;
     type Error = Error;
     type InitError = ();
@@ -138,12 +137,12 @@ where
     _t: PhantomData<(S, Ex, T, R)>,
 }
 
-impl<F, S, Ex, T, R> Service for HandleService<F, S, Ex, T, R>
+impl<F, S, Ex, T, R> Service<(T, ServiceRequest<S, Ex>)>
+    for HandleService<F, S, Ex, T, R>
 where
     F: Factory<S, Ex, T, R>,
     R: Responder<S> + 'static,
 {
-    type Request = (T, ServiceRequest<S, Ex>);
     type Response = Response;
     type Error = Error;
     type Future = ResponseFuture<R::Future>;
@@ -152,7 +151,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, (param, req): Self::Request) -> Self::Future {
+    fn call(&mut self, (param, req): (T, ServiceRequest<S, Ex>)) -> Self::Future {
         let (req, ex) = req.into_parts();
         ResponseFuture::new(self.hnd.call(param, ex).respond_to(req))
     }
@@ -206,14 +205,14 @@ where
         }
     }
 }
-impl<F, S, Ex, T, R, I, E> NewService for AsyncHandle<F, S, Ex, T, R, I, E>
+impl<F, S, Ex, T, R, I, E> NewService<Result<(T, ServiceRequest<S, Ex>), Error>>
+    for AsyncHandle<F, S, Ex, T, R, I, E>
 where
     F: AsyncFactory<S, Ex, T, R, I, E>,
     R: IntoFuture<Item = I, Error = E>,
     I: Into<Response>,
     E: Into<Error>,
 {
-    type Request = Result<(T, ServiceRequest<S, Ex>), Error>;
     type Response = Response;
     type Error = Error;
     type InitError = ();
@@ -240,14 +239,14 @@ where
     _t: PhantomData<(S, Ex, T, R, I, E)>,
 }
 
-impl<F, S, Ex, T, R, I, E> Service for AsyncHandleService<F, S, Ex, T, R, I, E>
+impl<F, S, Ex, T, R, I, E> Service<Result<(T, ServiceRequest<S, Ex>), Error>>
+    for AsyncHandleService<F, S, Ex, T, R, I, E>
 where
     F: AsyncFactory<S, Ex, T, R, I, E>,
     R: IntoFuture<Item = I, Error = E>,
     I: Into<Response>,
     E: Into<Error>,
 {
-    type Request = Result<(T, ServiceRequest<S, Ex>), Error>;
     type Response = Response;
     type Error = Error;
     type Future =
@@ -257,7 +256,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: Result<(T, ServiceRequest<S, Ex>), Error>) -> Self::Future {
         match req {
             Ok((param, req)) => {
                 let (_, extra) = req.into_parts();
@@ -313,11 +312,10 @@ where
         }
     }
 }
-impl<S, T, Ex> NewService for Extract<S, T, Ex>
+impl<S, T, Ex> NewService<ServiceRequest<S, Ex>> for Extract<S, T, Ex>
 where
     T: FromRequest<S> + 'static,
 {
-    type Request = ServiceRequest<S, Ex>;
     type Response = (T, ServiceRequest<S, Ex>);
     type Error = Error;
     type InitError = ();
@@ -340,11 +338,10 @@ where
     _t: PhantomData<Ex>,
 }
 
-impl<S, T, Ex> Service for ExtractService<S, T, Ex>
+impl<S, T, Ex> Service<ServiceRequest<S, Ex>> for ExtractService<S, T, Ex>
 where
     T: FromRequest<S> + 'static,
 {
-    type Request = ServiceRequest<S, Ex>;
     type Response = (T, ServiceRequest<S, Ex>);
     type Error = Error;
     type Future = ExtractResponse<S, T, Ex>;
@@ -353,7 +350,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: ServiceRequest<S, Ex>) -> Self::Future {
         ExtractResponse {
             fut: T::from_request(req.request(), self.cfg.as_ref()),
             req: Some(req),

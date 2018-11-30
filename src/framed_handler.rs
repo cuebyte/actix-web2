@@ -89,13 +89,13 @@ where
         }
     }
 }
-impl<F, S, Io, Ex, T, R, E> NewService for FramedHandle<F, S, Io, Ex, T, R, E>
+impl<F, S, Io, Ex, T, R, E> NewService<(T, FramedRequest<S, Io, Ex>)>
+    for FramedHandle<F, S, Io, Ex, T, R, E>
 where
     F: FramedFactory<S, Io, Ex, T, R, E>,
     R: IntoFuture<Item = (), Error = E>,
     E: Into<Error>,
 {
-    type Request = (T, FramedRequest<S, Io, Ex>);
     type Response = ();
     type Error = FramedError<Io>;
     type InitError = ();
@@ -121,13 +121,13 @@ where
     _t: PhantomData<(S, Io, Ex, T, R, E)>,
 }
 
-impl<F, S, Io, Ex, T, R, E> Service for FramedHandleService<F, S, Io, Ex, T, R, E>
+impl<F, S, Io, Ex, T, R, E> Service<(T, FramedRequest<S, Io, Ex>)>
+    for FramedHandleService<F, S, Io, Ex, T, R, E>
 where
     F: FramedFactory<S, Io, Ex, T, R, E>,
     R: IntoFuture<Item = (), Error = E>,
     E: Into<Error>,
 {
-    type Request = (T, FramedRequest<S, Io, Ex>);
     type Response = ();
     type Error = FramedError<Io>;
     type Future = FramedHandleServiceResponse<Io, R::Future>;
@@ -136,7 +136,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, (param, framed): Self::Request) -> Self::Future {
+    fn call(&mut self, (param, framed): (T, FramedRequest<S, Io, Ex>)) -> Self::Future {
         let (_, framed, ex) = framed.into_parts();
         FramedHandleServiceResponse {
             fut: self.hnd.call(framed, param, ex).into_future(),
@@ -191,11 +191,10 @@ where
         }
     }
 }
-impl<S, Io, Ex, T> NewService for FramedExtract<S, Io, Ex, T>
+impl<S, Io, Ex, T> NewService<FramedRequest<S, Io, Ex>> for FramedExtract<S, Io, Ex, T>
 where
     T: FromRequest<S> + 'static,
 {
-    type Request = FramedRequest<S, Io, Ex>;
     type Response = (T, FramedRequest<S, Io, Ex>);
     type Error = FramedError<Io>;
     type InitError = ();
@@ -218,11 +217,11 @@ where
     _t: PhantomData<(Io, Ex)>,
 }
 
-impl<S, Io, Ex, T> Service for FramedExtractService<S, Io, Ex, T>
+impl<S, Io, Ex, T> Service<FramedRequest<S, Io, Ex>>
+    for FramedExtractService<S, Io, Ex, T>
 where
     T: FromRequest<S> + 'static,
 {
-    type Request = FramedRequest<S, Io, Ex>;
     type Response = (T, FramedRequest<S, Io, Ex>);
     type Error = FramedError<Io>;
     type Future = FramedExtractResponse<S, Io, Ex, T>;
@@ -231,7 +230,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: FramedRequest<S, Io, Ex>) -> Self::Future {
         FramedExtractResponse {
             fut: T::from_request(&req.request(), self.cfg.as_ref()),
             req: Some(req),
