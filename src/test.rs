@@ -3,17 +3,16 @@ use std::str::FromStr;
 
 use bytes::Bytes;
 use futures::IntoFuture;
-use http::header::HeaderName;
-use http::{HeaderMap, HttpTryFrom, Method, Uri, Version};
 use tokio::runtime::current_thread::Runtime;
 
 use actix_http::dev::Payload;
-use actix_http::http::header::{Header, IntoHeaderValue};
+use actix_http::http::header::{Header, HeaderName, IntoHeaderValue};
+use actix_http::http::{HeaderMap, HttpTryFrom, Method, Uri, Version};
 use actix_http::Request as HttpRequest;
 
-use app::State;
-use param::Params;
-use request::Request;
+use crate::app::State;
+use crate::param::Params;
+use crate::request::Request;
 
 /// Test `Request` builder
 ///

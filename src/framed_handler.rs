@@ -6,9 +6,10 @@ use actix_net::codec::Framed;
 use actix_net::service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, IntoFuture, Poll};
+use log::error;
 
-use handler::FromRequest;
-use request::Request;
+use crate::handler::FromRequest;
+use crate::request::Request;
 
 pub struct FramedError<Io> {
     pub err: Error,

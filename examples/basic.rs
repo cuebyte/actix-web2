@@ -39,8 +39,10 @@ fn main() {
                     .service(Route::build("/resource2/index.html").with(index_async))
                     .service(Route::build("/test1.html").finish(|| "Test\r\n"))
                     .service(Route::build("/").finish(no_params)),
-            ).map(|_| ())
-        }).unwrap()
+            )
+            .map(|_| ())
+        })
+        .unwrap()
         .start();
 
     let _ = sys.run();

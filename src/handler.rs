@@ -4,10 +4,10 @@ use std::rc::Rc;
 use actix_http::{Error, Response};
 use actix_net::service::{NewService, Service};
 use futures::future::{ok, Either, FutureResult};
-use futures::{Async, Future, IntoFuture, Poll};
+use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
-use request::Request;
-use responder::{Responder, ResponseFuture};
+use crate::request::Request;
+use crate::responder::{Responder, ResponseFuture};
 
 /// Trait implemented by types that can be extracted from request.
 ///

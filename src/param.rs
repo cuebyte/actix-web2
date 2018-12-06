@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use actix_http::http::Uri;
 
-use url::Url;
+use crate::url::Url;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ParamItem {

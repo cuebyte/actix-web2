@@ -7,9 +7,9 @@ use actix_http::Request as BaseRequest;
 use actix_http::{Error, HttpMessage};
 use futures::future::{ok, FutureResult};
 
-use app::State;
-use handler::FromRequest;
-use param::Params;
+use crate::app::State;
+use crate::handler::FromRequest;
+use crate::param::Params;
 
 pub struct Request<S = ()> {
     base: BaseRequest,

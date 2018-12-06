@@ -5,7 +5,7 @@ use bytes::{Bytes, BytesMut};
 use futures::future::{err, ok, Either as EitherFuture, FutureResult};
 use futures::{Future, Poll};
 
-use request::Request;
+use crate::request::Request;
 
 /// Trait implemented by types that generate responses for clients.
 ///

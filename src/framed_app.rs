@@ -9,8 +9,8 @@ use actix_net::service::{IntoNewService, NewService, Service};
 use futures::{Async, Future, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
 
-use app::{HttpService, HttpServiceFactory, State};
-use helpers::{BoxedHttpNewService, BoxedHttpService, HttpNewService};
+use crate::app::{HttpService, HttpServiceFactory, State};
+use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpNewService};
 
 pub type FramedRequest<T> = (Request, Framed<T, Codec>);
 type BoxedResponse = Box<Future<Item = (), Error = ()>>;
@@ -185,7 +185,8 @@ where
                 .map(|item| match item {
                     CreateServiceItem::Service(service) => service,
                     CreateServiceItem::Future(_) => unreachable!(),
-                }).collect();
+                })
+                .collect();
             Ok(Async::Ready(CloneableService::new(FramedAppService {
                 services,
                 // default: self.default.take().expect("something is wrong"),

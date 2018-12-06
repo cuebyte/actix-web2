@@ -1,5 +1,7 @@
-use http::Uri;
 use std::rc::Rc;
+
+use actix_http::http::Uri;
+use lazy_static::lazy_static;
 
 #[allow(dead_code)]
 const GEN_DELIMS: &[u8] = b":/?#[]@";

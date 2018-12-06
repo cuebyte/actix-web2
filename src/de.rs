@@ -1,7 +1,8 @@
 use serde::de::{self, Deserializer, Error as DeError, Visitor};
+use serde::forward_to_deserialize_any;
 
-use param::ParamsIter;
-use request::Request;
+use crate::param::ParamsIter;
+use crate::request::Request;
 
 macro_rules! unsupported_type {
     ($trait_fn:ident, $name:expr) => {
@@ -111,7 +112,8 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
                     "wrong number of parameters: {} expected {}",
                     self.req.match_info().len(),
                     len
-                ).as_str(),
+                )
+                .as_str(),
             ))
         } else {
             visitor.visit_seq(ParamsSeq {
@@ -135,7 +137,8 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
                     "wrong number of parameters: {} expected {}",
                     self.req.match_info().len(),
                     len
-                ).as_str(),
+                )
+                .as_str(),
             ))
         } else {
             visitor.visit_seq(ParamsSeq {
@@ -165,7 +168,8 @@ impl<'de, S: 'de> Deserializer<'de> for PathDeserializer<'de, S> {
                 format!(
                     "wrong number of parameters: {} expected 1",
                     self.req.match_info().len()
-                ).as_str(),
+                )
+                .as_str(),
             ))
         } else {
             visitor.visit_str(&self.req.match_info()[0])

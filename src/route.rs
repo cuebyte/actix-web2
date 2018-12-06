@@ -1,10 +1,9 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, IntoFuture, Poll};
-
 use actix_http::http::{HeaderName, HeaderValue, Method};
 use actix_http::{Error, Request, Response};
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
+use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
 use super::app::{HttpService, HttpServiceFactory, State};
 use super::handler::{

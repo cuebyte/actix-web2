@@ -5,7 +5,7 @@ use actix_net::service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Future, Poll};
 
-use app::HttpService;
+use crate::app::HttpService;
 
 pub(crate) type BoxedHttpService<Req, Res> = Box<
     HttpService<

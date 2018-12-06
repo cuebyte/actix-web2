@@ -1,12 +1,12 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, IntoFuture, Poll};
-
 use actix_http::h1::Codec;
 use actix_http::http::{HeaderName, HeaderValue, Method};
 use actix_http::{Error, Request};
 use actix_net::codec::Framed;
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
+use futures::{try_ready, Async, Future, IntoFuture, Poll};
+use log::{debug, error};
 use tokio_io::{AsyncRead, AsyncWrite};
 
 use super::app::{HttpService, HttpServiceFactory, State};

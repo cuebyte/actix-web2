@@ -7,12 +7,12 @@ use actix_net::service::{IntoNewService, NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
-use handler::FromRequest;
-use helpers::{
+use crate::handler::FromRequest;
+use crate::helpers::{
     not_found, BoxedHttpNewService, BoxedHttpService, DefaultNewService,
     HttpDefaultNewService, HttpDefaultService, HttpNewService,
 };
-use request::Request as WebRequest;
+use crate::request::Request as WebRequest;
 
 type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
 
@@ -206,7 +206,8 @@ impl Future for CreateService {
                 .map(|item| match item {
                     CreateServiceItem::Service(service) => service,
                     CreateServiceItem::Future(_) => unreachable!(),
-                }).collect();
+                })
+                .collect();
             Ok(Async::Ready(CloneableService::new(AppService {
                 services,
                 default: self.default.take().expect("something is wrong"),
