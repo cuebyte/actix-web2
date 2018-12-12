@@ -24,9 +24,13 @@ name = "actix_web2"
 path = "src/lib.rs"
 
 [dependencies]
-actix = "0.7"
-#actix-net = "0.3.0"
-actix-net = { git="https://github.com/actix/actix-net.git" }
+actix-service = "0.1.1"
+actix-codec = "0.1.0"
+actix-connector = "0.1.0"
+actix-rt = "0.1.0"
+actix-server = "0.1.2"
+actix-utils = "0.1.0"
+
 actix-http = { git = "https://github.com/fafhrd91/actix-http.git" }
 
 bytes = "0.4"
@@ -39,8 +43,6 @@ serde = "1.0"
 serde_json = "1.0"
 encoding = "0.2"
 serde_urlencoded = "^0.5.3"
-tokio = "0.1"
-tokio-io = "0.1"
 
 [dev-dependencies]
 actix-web = "0.7"

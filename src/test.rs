@@ -1,14 +1,13 @@
 //! Various helpers for Actix applications to use during testing.
 use std::str::FromStr;
 
-use bytes::Bytes;
-use futures::IntoFuture;
-use tokio::runtime::current_thread::Runtime;
-
 use actix_http::dev::Payload;
 use actix_http::http::header::{Header, HeaderName, IntoHeaderValue};
 use actix_http::http::{HeaderMap, HttpTryFrom, Method, Uri, Version};
 use actix_http::Request as HttpRequest;
+use actix_rt::Runtime;
+use bytes::Bytes;
+use futures::IntoFuture;
 
 use crate::app::State;
 use crate::param::Params;
