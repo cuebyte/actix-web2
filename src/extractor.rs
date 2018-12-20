@@ -1048,7 +1048,8 @@ mod tests {
         let req = TestRequest::with_header(
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
-        ).header(header::CONTENT_LENGTH, "11")
+        )
+        .header(header::CONTENT_LENGTH, "11")
         .set_payload(Bytes::from_static(b"hello=world"))
         .finish();
 
@@ -1067,7 +1068,8 @@ mod tests {
         let req = TestRequest::with_header(
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
-        ).finish();
+        )
+        .finish();
 
         let mut cfg = FormConfig::default();
         cfg.limit(4096);
@@ -1083,7 +1085,8 @@ mod tests {
         let req = TestRequest::with_header(
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
-        ).header(header::CONTENT_LENGTH, "9")
+        )
+        .header(header::CONTENT_LENGTH, "9")
         .set_payload(Bytes::from_static(b"hello=world"))
         .finish();
 
@@ -1103,7 +1106,8 @@ mod tests {
         let req = TestRequest::with_header(
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
-        ).header(header::CONTENT_LENGTH, "9")
+        )
+        .header(header::CONTENT_LENGTH, "9")
         .set_payload(Bytes::from_static(b"bye=world"))
         .finish();
 
@@ -1121,7 +1125,8 @@ mod tests {
         let req = TestRequest::with_header(
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
-        ).header(header::CONTENT_LENGTH, "11")
+        )
+        .header(header::CONTENT_LENGTH, "11")
         .set_payload(Bytes::from_static(b"hello=world"))
         .finish();
 
@@ -1141,7 +1146,8 @@ mod tests {
         let req = TestRequest::with_header(
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
-        ).header(header::CONTENT_LENGTH, "9")
+        )
+        .header(header::CONTENT_LENGTH, "9")
         .set_payload(Bytes::from_static(b"bye=world"))
         .finish();
 
@@ -1164,7 +1170,8 @@ mod tests {
         let req = TestRequest::with_header(
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
-        ).finish();
+        )
+        .finish();
         assert!(cfg.check_mimetype(&req).is_err());
 
         let req =

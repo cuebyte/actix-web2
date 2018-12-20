@@ -179,7 +179,8 @@ where
                 .map(|item| match item {
                     CreateServiceItem::Service(service) => service,
                     CreateServiceItem::Future(_) => unreachable!(),
-                }).collect();
+                })
+                .collect();
             Ok(Async::Ready(CloneableService::new(FramedAppService {
                 services,
                 // default: self.default.take().expect("something is wrong"),
