@@ -30,11 +30,11 @@ actix-connector = "0.1.0"
 actix-rt = "0.1.0"
 actix-server = "0.1.2"
 actix-utils = "0.1.0"
-
 actix-http = { git = "https://github.com/fafhrd91/actix-http.git" }
 
 bytes = "0.4"
 futures = "0.1"
+derive_more = "0.13"
 log = "0.4"
 lazy_static = "1.0"
 mime = "0.3"

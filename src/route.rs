@@ -51,6 +51,7 @@ impl<S> Route<(), S> {
 impl<T, S> Route<T, S>
 where
     T: NewService<ServiceRequest<S>, Response = Response> + 'static,
+    T::Error: Into<Error>,
 {
     pub fn new<F: IntoNewService<T, ServiceRequest<S>>>(
         pattern: ResourcePattern,
@@ -78,7 +79,7 @@ where
 
 impl<T, S> HttpServiceFactory<S, Request> for Route<T, S>
 where
-    T: NewService<ServiceRequest<S>, Response = Response> + 'static,
+    T: NewService<ServiceRequest<S>, Response = Response, Error = Error> + 'static,
     T::Service: 'static,
 {
     type Factory = RouteFactory<T, S>;
@@ -104,7 +105,7 @@ pub struct RouteFactory<T, S> {
 
 impl<T, S> NewService<Request> for RouteFactory<T, S>
 where
-    T: NewService<ServiceRequest<S>, Response = Response> + 'static,
+    T: NewService<ServiceRequest<S>, Response = Response, Error = Error> + 'static,
     T::Service: 'static,
 {
     type Response = T::Response;
@@ -135,6 +136,7 @@ pub struct CreateRouteService<T: NewService<ServiceRequest<S>>, S> {
 impl<T, S> Future for CreateRouteService<T, S>
 where
     T: NewService<ServiceRequest<S>, Response = Response>,
+    T::Error: Into<Error>,
 {
     type Item = RouteService<T::Service, S>;
     type Error = T::InitError;
@@ -162,7 +164,7 @@ pub struct RouteService<T, S> {
 
 impl<T, S> Service<Request> for RouteService<T, S>
 where
-    T: Service<ServiceRequest<S>, Response = Response> + 'static,
+    T: Service<ServiceRequest<S>, Response = Response, Error = Error> + 'static,
 {
     type Response = T::Response;
     type Error = T::Error;
@@ -183,7 +185,7 @@ where
 
 impl<T, S> HttpService<Request> for RouteService<T, S>
 where
-    T: Service<ServiceRequest<S>, Response = Response> + 'static,
+    T: Service<ServiceRequest<S>, Response = Response, Error = Error> + 'static,
     S: 'static,
 {
     fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {

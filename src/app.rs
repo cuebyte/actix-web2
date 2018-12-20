@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 
@@ -10,7 +11,7 @@ use futures::{Async, Future, Poll};
 use crate::handler::FromRequest;
 use crate::helpers::{
     not_found, BoxedHttpNewService, BoxedHttpService, DefaultNewService,
-    HttpDefaultNewService, HttpDefaultService, HttpNewService,
+    HttpDefaultNewService, HttpDefaultService,
 };
 use crate::request::Request as WebRequest;
 
@@ -93,7 +94,7 @@ impl<S> App<S> {
     pub fn service<T>(mut self, factory: T) -> Self
     where
         T: HttpServiceFactory<S, Request>,
-        T::Factory: NewService<Request, Response = Response> + 'static,
+        T::Factory: NewService<Request, Response = Response, Error = Error> + 'static,
         <T::Factory as NewService<Request>>::Future: 'static,
         <T::Factory as NewService<Request>>::Service: HttpService<Request>,
         <<T::Factory as NewService<Request>>::Service as Service<Request>>::Future:
@@ -251,5 +252,94 @@ impl Service<Request> for AppService {
             };
         }
         self.default.call(req)
+    }
+}
+
+struct HttpNewService<T: NewService<Request, Error = Error>, Request>(
+    T,
+    PhantomData<Request>,
+);
+
+impl<T, Request> HttpNewService<T, Request>
+where
+    T: NewService<Request, Response = Response, Error = Error>,
+    T::Response: 'static,
+    T::Future: 'static,
+    T::Service: HttpService<Request>,
+    <T::Service as Service<Request>>::Future: 'static,
+{
+    pub fn new(service: T) -> Self {
+        HttpNewService(service, PhantomData)
+    }
+}
+
+impl<T, Request> NewService<Request> for HttpNewService<T, Request>
+where
+    T: NewService<Request, Response = Response, Error = Error>,
+    T::Response: 'static,
+    T::Future: 'static,
+    T::Service: HttpService<Request>,
+    <T::Service as Service<Request>>::Future: 'static,
+    Request: 'static,
+{
+    type Response = T::Response;
+    type Error = ();
+    type InitError = ();
+    type Service = BoxedHttpService<Request, T::Response>;
+    type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
+
+    fn new_service(&self) -> Self::Future {
+        Box::new(self.0.new_service().map_err(|_| ()).and_then(|service| {
+            let service: BoxedHttpService<_, _> = Box::new(HttpServiceWrapper {
+                service,
+                _t: PhantomData,
+            });
+            Ok(service)
+        }))
+    }
+}
+
+struct HttpServiceWrapper<T: Service<Request>, Request> {
+    service: T,
+    _t: PhantomData<Request>,
+}
+
+impl<T, Request> Service<Request> for HttpServiceWrapper<T, Request>
+where
+    T::Response: 'static,
+    T::Future: 'static,
+    T: Service<Request, Response = Response, Error = Error> + HttpService<Request>,
+{
+    type Response = T::Response;
+    type Error = ();
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        self.service.poll_ready().map_err(|_| ())
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        Box::new(self.service.call(req).then(|res| match res {
+            Ok(res) => Ok(res),
+            Err(e) => Ok(Response::from(e)),
+        }))
+    }
+}
+
+impl<T: HttpService<Request>, Request> HttpService<Request>
+    for HttpServiceWrapper<T, Request>
+where
+    T::Future: 'static,
+    T: Service<Request, Response = Response, Error = Error>,
+    Request: 'static,
+{
+    fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {
+        match self.service.handle(req) {
+            Ok(fut) => Ok(Box::new(fut.then(|res| match res {
+                Ok(res) => Ok(res),
+                Err(e) => Ok(Response::from(e)),
+            }))),
+            Err(req) => Err(req),
+        }
     }
 }
