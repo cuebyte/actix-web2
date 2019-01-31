@@ -3,17 +3,17 @@ use std::str::FromStr;
 
 use bytes::Bytes;
 use futures::IntoFuture;
-use http::header::HeaderName;
-use http::{HeaderMap, HttpTryFrom, Method, Uri, Version};
 use tokio::runtime::current_thread::Runtime;
 
 use actix_http::dev::Payload;
-use actix_http::http::header::{Header, IntoHeaderValue};
+use actix_http::http::header::{Header, HeaderName, IntoHeaderValue};
+use actix_http::http::{HeaderMap, HttpTryFrom, Method, Uri, Version};
 use actix_http::Request as HttpRequest;
+use actix_router::Path;
 
-use app::State;
-use param::Params;
-use request::Request;
+use crate::app::State;
+use crate::request::Request;
+use crate::url::Url;
 
 /// Test `Request` builder
 ///
@@ -48,7 +48,7 @@ pub struct TestRequest<S> {
     method: Method,
     uri: Uri,
     headers: HeaderMap,
-    params: Params,
+    params: Path<Url>,
     payload: Option<Payload>,
 }
 
@@ -60,7 +60,7 @@ impl Default for TestRequest<()> {
             uri: Uri::from_str("/").unwrap(),
             version: Version::HTTP_11,
             headers: HeaderMap::new(),
-            params: Params::new(),
+            params: Path::new(Url::default()),
             payload: None,
         }
     }
@@ -96,7 +96,7 @@ impl<S: 'static> TestRequest<S> {
             uri: Uri::from_str("/").unwrap(),
             version: Version::HTTP_11,
             headers: HeaderMap::new(),
-            params: Params::new(),
+            params: Path::new(Url::default()),
             payload: None,
         }
     }
@@ -169,7 +169,7 @@ impl<S: 'static> TestRequest<S> {
             payload,
         } = self;
 
-        params.set_uri(&uri);
+        params.get_mut().update(&uri);
 
         let mut req = HttpRequest::new();
         {

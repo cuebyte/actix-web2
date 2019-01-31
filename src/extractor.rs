@@ -20,11 +20,11 @@ use actix_http::error::{
 };
 use actix_http::http::StatusCode;
 use actix_http::{HttpMessage, Response};
+use actix_router::PathDeserializer;
 
-use de::PathDeserializer;
-use handler::FromRequest;
-use request::Request;
-use responder::Responder;
+use crate::handler::FromRequest;
+use crate::request::Request;
+use crate::responder::Responder;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.
@@ -114,7 +114,7 @@ impl<T> Path<T> {
     where
         T: DeserializeOwned,
     {
-        de::Deserialize::deserialize(PathDeserializer::new(req))
+        de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
             .map(|inner| Path { inner })
     }
 }

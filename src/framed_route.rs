@@ -1,23 +1,17 @@
 use std::marker::PhantomData;
 
-use futures::{Async, Future, IntoFuture, Poll};
-
-use actix_http::h1::Codec;
 use actix_http::http::{HeaderName, HeaderValue, Method};
-use actix_http::{Error, Request};
-use actix_net::codec::Framed;
+use actix_http::Error;
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
+use futures::{try_ready, Async, Future, IntoFuture, Poll};
+use log::{debug, error};
 use tokio_io::{AsyncRead, AsyncWrite};
 
-use super::app::{HttpService, HttpServiceFactory, State};
-use super::handler::FromRequest;
-use super::param::Params;
-use super::pattern::ResourcePattern;
-use super::request::Request as WebRequest;
-
-use super::framed_handler::{
+use crate::app::{HttpServiceFactory, State};
+use crate::framed_handler::{
     FramedError, FramedExtract, FramedFactory, FramedHandle, FramedRequest,
 };
+use crate::handler::FromRequest;
 
 /// Resource route definition
 ///
@@ -25,7 +19,7 @@ use super::framed_handler::{
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct FramedRoute<Io, T, S = ()> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<(S, Io)>,
@@ -61,9 +55,9 @@ where
             Error = FramedError<Io>,
         > + 'static,
 {
-    pub fn new<F: IntoNewService<T>>(pattern: ResourcePattern, factory: F) -> Self {
+    pub fn new<F: IntoNewService<T>>(pattern: &str, factory: F) -> Self {
         FramedRoute {
-            pattern,
+            pattern: pattern.to_string(),
             service: factory.into_new_service(),
             headers: Vec::new(),
             methods: Vec::new(),
@@ -82,7 +76,7 @@ where
     }
 }
 
-impl<Io, T, S> HttpServiceFactory<S> for FramedRoute<Io, T, S>
+impl<Io, T, S> HttpServiceFactory<S, FramedRequest<S, Io>> for FramedRoute<Io, T, S>
 where
     Io: AsyncRead + AsyncWrite + 'static,
     T: NewService<
@@ -90,8 +84,13 @@ where
             Response = (),
             Error = FramedError<Io>,
         > + 'static,
+    T::Service: 'static,
 {
     type Factory = FramedRouteFactory<Io, T, S>;
+
+    fn path(&self) -> &str {
+        &self.pattern
+    }
 
     fn create(self, state: State<S>) -> Self::Factory {
         FramedRouteFactory {
@@ -107,7 +106,7 @@ where
 
 pub struct FramedRouteFactory<Io, T, S> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: State<S>,
@@ -122,8 +121,9 @@ where
             Response = (),
             Error = FramedError<Io>,
         > + 'static,
+    T::Service: 'static,
 {
-    type Request = (Request, Framed<Io, Codec>);
+    type Request = FramedRequest<S, Io>;
     type Response = T::Response;
     type Error = ();
     type InitError = T::InitError;
@@ -144,7 +144,7 @@ where
 
 pub struct CreateRouteService<Io, T: NewService, S> {
     fut: T::Future,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: State<S>,
@@ -153,7 +153,11 @@ pub struct CreateRouteService<Io, T: NewService, S> {
 
 impl<Io, T, S> Future for CreateRouteService<Io, T, S>
 where
-    T: NewService<Request = FramedRequest<S, Io>, Response = ()>,
+    T: NewService<
+        Request = FramedRequest<S, Io>,
+        Response = (),
+        Error = FramedError<Io>,
+    >,
 {
     type Item = FramedRouteService<Io, T::Service, S>;
     type Error = T::InitError;
@@ -174,7 +178,7 @@ where
 
 pub struct FramedRouteService<Io, T, S> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: State<S>,
@@ -187,7 +191,7 @@ where
     T: Service<Request = FramedRequest<S, Io>, Response = (), Error = FramedError<Io>>
         + 'static,
 {
-    type Request = (Request, Framed<Io, Codec>);
+    type Request = FramedRequest<S, Io>;
     type Response = ();
     type Error = ();
     type Future = FramedRouteServiceResponse<Io, T::Future>;
@@ -199,46 +203,42 @@ where
         })
     }
 
-    fn call(&mut self, (req, framed): Self::Request) -> Self::Future {
+    fn call(&mut self, req: FramedRequest<S, Io>) -> Self::Future {
         FramedRouteServiceResponse {
-            fut: self.service.call(FramedRequest::new(
-                WebRequest::new(self.state.clone(), req, Params::new()),
-                framed,
-            )),
+            fut: self.service.call(req),
             send: None,
             _t: PhantomData,
         }
     }
 }
 
-impl<Io, T, S> HttpService for FramedRouteService<Io, T, S>
-where
-    Io: AsyncRead + AsyncWrite + 'static,
-    S: 'static,
-    T: Service<Request = FramedRequest<S, Io>, Response = (), Error = FramedError<Io>>
-        + 'static,
-{
-    fn handle(
-        &mut self,
-        (req, framed): Self::Request,
-    ) -> Result<Self::Future, Self::Request> {
-        if self.methods.is_empty()
-            || !self.methods.is_empty() && self.methods.contains(req.method())
-        {
-            if let Some(params) = self.pattern.match_with_params(&req, 0) {
-                return Ok(FramedRouteServiceResponse {
-                    fut: self.service.call(FramedRequest::new(
-                        WebRequest::new(self.state.clone(), req, params),
-                        framed,
-                    )),
-                    send: None,
-                    _t: PhantomData,
-                });
-            }
-        }
-        Err((req, framed))
-    }
-}
+// impl<Io, T, S> HttpService<(Request, Framed<Io, Codec>)> for FramedRouteService<Io, T, S>
+// where
+//     Io: AsyncRead + AsyncWrite + 'static,
+//     S: 'static,
+//     T: Service<FramedRequest<S, Io>, Response = (), Error = FramedError<Io>> + 'static,
+// {
+//     fn handle(
+//         &mut self,
+//         (req, framed): (Request, Framed<Io, Codec>),
+//     ) -> Result<Self::Future, (Request, Framed<Io, Codec>)> {
+//         if self.methods.is_empty()
+//             || !self.methods.is_empty() && self.methods.contains(req.method())
+//         {
+//             if let Some(params) = self.pattern.match_with_params(&req, 0) {
+//                 return Ok(FramedRouteServiceResponse {
+//                     fut: self.service.call(FramedRequest::new(
+//                         WebRequest::new(self.state.clone(), req, params),
+//                         framed,
+//                     )),
+//                     send: None,
+//                     _t: PhantomData,
+//                 });
+//             }
+//         }
+//         Err((req, framed))
+//     }
+// }
 
 #[doc(hidden)]
 pub struct FramedRouteServiceResponse<Io, F> {
@@ -279,7 +279,7 @@ where
 }
 
 pub struct FramedRoutePatternBuilder<Io, S> {
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<(Io, S)>,
@@ -288,7 +288,7 @@ pub struct FramedRoutePatternBuilder<Io, S> {
 impl<Io, S> FramedRoutePatternBuilder<Io, S> {
     fn new(path: &str) -> FramedRoutePatternBuilder<Io, S> {
         FramedRoutePatternBuilder {
-            pattern: ResourcePattern::new(path),
+            pattern: path.to_string(),
             methods: Vec::new(),
             headers: Vec::new(),
             state: PhantomData,
@@ -353,7 +353,7 @@ impl<Io, S> FramedRoutePatternBuilder<Io, S> {
 
 pub struct FramedRouteBuilder<Io, S, T, U1, U2> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<(Io, S, U1, U2)>,
@@ -371,7 +371,7 @@ where
     pub fn new<F: IntoNewService<T>>(path: &str, factory: F) -> Self {
         FramedRouteBuilder {
             service: factory.into_new_service(),
-            pattern: ResourcePattern::new(path),
+            pattern: path.to_string(),
             methods: Vec::new(),
             headers: Vec::new(),
             state: PhantomData,

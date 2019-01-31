@@ -13,6 +13,7 @@ categories = ["network-programming", "asynchronous",
               "web-programming::websocket"]
 license = "MIT/Apache-2.0"
 exclude = [".gitignore", ".travis.yml", ".cargo/config", "appveyor.yml"]
+edition = "2018"
 
 [badges]
 travis-ci = { repository = "actix/actix-web2", branch = "master" }
@@ -24,8 +25,9 @@ path = "src/lib.rs"
 
 [dependencies]
 actix = "0.7"
-actix-net = "0.2.4"
-actix-http = { git = "https://github.com/fafhrd91/actix-http.git", branch="stable-0.2" }
+actix-net = "0.2.6"
+actix-http = { git = "https://github.com/actix/actix-http.git", branch="stable-0.2" }
+actix-router = { git = "https://github.com/actix/actix-net.git" }
 
 bytes = "0.4"
 futures = "0.1"

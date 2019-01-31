@@ -6,9 +6,10 @@ use actix_net::codec::Framed;
 use actix_net::service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, IntoFuture, Poll};
+use log::error;
 
-use handler::FromRequest;
-use request::Request;
+use crate::handler::FromRequest;
+use crate::request::Request;
 
 pub struct FramedError<Io> {
     pub err: Error,
@@ -136,7 +137,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, (param, framed): Self::Request) -> Self::Future {
+    fn call(&mut self, (param, framed): (T, FramedRequest<S, Io, Ex>)) -> Self::Future {
         let (_, framed, ex) = framed.into_parts();
         FramedHandleServiceResponse {
             fut: self.hnd.call(framed, param, ex).into_future(),
@@ -231,7 +232,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: FramedRequest<S, Io, Ex>) -> Self::Future {
         FramedExtractResponse {
             fut: T::from_request(&req.request(), self.cfg.as_ref()),
             req: Some(req),

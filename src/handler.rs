@@ -4,10 +4,10 @@ use std::rc::Rc;
 use actix_http::{Error, Response};
 use actix_net::service::{NewService, Service};
 use futures::future::{ok, Either, FutureResult};
-use futures::{Async, Future, IntoFuture, Poll};
+use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
-use request::Request;
-use responder::{Responder, ResponseFuture};
+use crate::request::Request;
+use crate::responder::{Responder, ResponseFuture};
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -152,7 +152,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, (param, req): Self::Request) -> Self::Future {
+    fn call(&mut self, (param, req): (T, ServiceRequest<S, Ex>)) -> Self::Future {
         let (req, ex) = req.into_parts();
         ResponseFuture::new(self.hnd.call(param, ex).respond_to(req))
     }
@@ -257,7 +257,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: Result<(T, ServiceRequest<S, Ex>), Error>) -> Self::Future {
         match req {
             Ok((param, req)) => {
                 let (_, extra) = req.into_parts();
@@ -353,7 +353,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: ServiceRequest<S, Ex>) -> Self::Future {
         ExtractResponse {
             fut: T::from_request(req.request(), self.cfg.as_ref()),
             req: Some(req),

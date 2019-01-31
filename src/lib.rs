@@ -1,30 +1,7 @@
-extern crate actix;
-extern crate actix_http;
-extern crate actix_net;
-extern crate bytes;
-extern crate encoding;
-#[macro_use]
-extern crate futures;
-#[macro_use]
-extern crate log;
-extern crate mime;
-extern crate regex;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate serde;
-extern crate serde_json;
-extern crate serde_urlencoded;
-extern crate tokio;
-extern crate tokio_io;
-
 mod app;
-mod de;
 mod extractor;
 pub mod handler;
 mod helpers;
-mod param;
-pub mod pattern;
 mod request;
 mod responder;
 mod route;
@@ -38,16 +15,15 @@ mod framed_route;
 // re-export for convinience
 pub use actix_http::{http, Error, HttpMessage, Response, ResponseError};
 
-pub use app::{App, AppService, State};
-pub use extractor::{Form, Json, Path, Query};
-pub use handler::FromRequest;
-pub use request::Request;
-pub use responder::{Either, Responder};
-pub use route::Route;
+pub use crate::app::{App, AppService, State};
+pub use crate::extractor::{Form, Json, Path, Query};
+pub use crate::handler::FromRequest;
+pub use crate::request::Request;
+pub use crate::responder::{Either, Responder};
+pub use crate::route::Route;
 
 pub mod dev {
-    pub use handler::{AsyncFactory, Extract, Factory, Handle};
-    pub use param::Params;
+    pub use crate::handler::{AsyncFactory, Extract, Factory, Handle};
 }
 
 pub mod framed {
