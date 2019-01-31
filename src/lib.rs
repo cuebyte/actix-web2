@@ -1,10 +1,7 @@
 mod app;
-mod de;
 mod extractor;
 pub mod handler;
 mod helpers;
-mod param;
-pub mod pattern;
 mod request;
 mod responder;
 mod route;
@@ -27,7 +24,6 @@ pub use crate::route::Route;
 
 pub mod dev {
     pub use crate::handler::{AsyncFactory, Extract, Factory, Handle};
-    pub use crate::param::Params;
 }
 
 pub mod framed {

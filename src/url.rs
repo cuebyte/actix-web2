@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use actix_http::http::Uri;
+use actix_router::RequestPath;
 use lazy_static::lazy_static;
 
 #[allow(dead_code)]
@@ -38,7 +39,7 @@ lazy_static! {
 }
 
 #[derive(Default, Clone, Debug)]
-pub(crate) struct Url {
+pub struct Url {
     uri: Uri,
     path: Option<Rc<String>>,
 }
@@ -65,6 +66,12 @@ impl Url {
     pub fn update(&mut self, uri: &Uri) {
         self.uri = uri.clone();
         self.path = DEFAULT_QUOTER.requote(uri.path().as_bytes());
+    }
+}
+
+impl RequestPath for Url {
+    fn path(&self) -> &str {
+        self.path()
     }
 }
 

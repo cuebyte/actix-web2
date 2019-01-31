@@ -2,17 +2,18 @@ use std::marker::PhantomData;
 
 use actix_http::http::{HeaderName, HeaderValue, Method};
 use actix_http::{Error, Request, Response};
+use actix_router::Path;
 use actix_service::{IntoNewService, NewService, Service};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
-use super::app::{HttpService, HttpServiceFactory, State};
+use super::app::{HttpServiceFactory, State};
 use super::handler::{
     AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, ServiceRequest,
 };
-use super::param::Params;
-use super::pattern::ResourcePattern;
+// use super::param::Params;
 use super::request::Request as WebRequest;
 use super::responder::Responder;
+use super::url::Url;
 
 /// Resource route definition
 ///
@@ -20,7 +21,7 @@ use super::responder::Responder;
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct Route<T, S = ()> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<S>,
@@ -54,11 +55,11 @@ where
     T::Error: Into<Error>,
 {
     pub fn new<F: IntoNewService<T, ServiceRequest<S>>>(
-        pattern: ResourcePattern,
+        pattern: &str,
         factory: F,
     ) -> Self {
         Route {
-            pattern,
+            pattern: pattern.to_owned(),
             service: factory.into_new_service(),
             headers: Vec::new(),
             methods: Vec::new(),
@@ -84,6 +85,10 @@ where
 {
     type Factory = RouteFactory<T, S>;
 
+    fn path(&self) -> &str {
+        &self.pattern
+    }
+
     fn create(self, state: State<S>) -> Self::Factory {
         RouteFactory {
             state,
@@ -97,7 +102,7 @@ where
 
 pub struct RouteFactory<T, S> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: State<S>,
@@ -127,7 +132,7 @@ where
 
 pub struct CreateRouteService<T: NewService<ServiceRequest<S>>, S> {
     fut: T::Future,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: State<S>,
@@ -156,7 +161,7 @@ where
 
 pub struct RouteService<T, S> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: State<S>,
@@ -178,34 +183,34 @@ where
         self.service.call(ServiceRequest::new(WebRequest::new(
             self.state.clone(),
             req,
-            Params::new(),
+            Path::new(Url::default()),
         )))
     }
 }
 
-impl<T, S> HttpService<Request> for RouteService<T, S>
-where
-    T: Service<ServiceRequest<S>, Response = Response, Error = Error> + 'static,
-    S: 'static,
-{
-    fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {
-        if self.methods.is_empty()
-            || !self.methods.is_empty() && self.methods.contains(req.method())
-        {
-            if let Some(params) = self.pattern.match_with_params(&req, 0) {
-                return Ok(self.service.call(ServiceRequest::new(WebRequest::new(
-                    self.state.clone(),
-                    req,
-                    params,
-                ))));
-            }
-        }
-        Err(req)
-    }
-}
+// impl<T, S> HttpService<Request> for RouteService<T, S>
+// where
+//     T: Service<ServiceRequest<S>, Response = Response, Error = Error> + 'static,
+//     S: 'static,
+// {
+//     fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {
+//         if self.methods.is_empty()
+//             || !self.methods.is_empty() && self.methods.contains(req.method())
+//         {
+//             if let Some(params) = self.pattern.match_with_params(&req, 0) {
+//                 return Ok(self.service.call(ServiceRequest::new(WebRequest::new(
+//                     self.state.clone(),
+//                     req,
+//                     params,
+//                 ))));
+//             }
+//         }
+//         Err(req)
+//     }
+// }
 
 pub struct RoutePatternBuilder<S> {
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<S>,
@@ -214,7 +219,7 @@ pub struct RoutePatternBuilder<S> {
 impl<S> RoutePatternBuilder<S> {
     fn new(path: &str) -> RoutePatternBuilder<S> {
         RoutePatternBuilder {
-            pattern: ResourcePattern::new(path),
+            pattern: path.to_string(),
             methods: Vec::new(),
             headers: Vec::new(),
             state: PhantomData,
@@ -303,7 +308,7 @@ impl<S> RoutePatternBuilder<S> {
 
 pub struct RouteBuilder<T, S, U1, U2> {
     service: T,
-    pattern: ResourcePattern,
+    pattern: String,
     methods: Vec<Method>,
     headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<(S, U1, U2)>,
@@ -324,7 +329,7 @@ where
     ) -> Self {
         RouteBuilder {
             service: factory.into_new_service(),
-            pattern: ResourcePattern::new(path),
+            pattern: path.to_string(),
             methods: Vec::new(),
             headers: Vec::new(),
             state: PhantomData,

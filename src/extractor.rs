@@ -20,8 +20,8 @@ use actix_http::error::{
 };
 use actix_http::http::StatusCode;
 use actix_http::{HttpMessage, Response};
+use actix_router::PathDeserializer;
 
-use crate::de::PathDeserializer;
 use crate::handler::FromRequest;
 use crate::request::Request;
 use crate::responder::Responder;
@@ -114,7 +114,7 @@ impl<T> Path<T> {
     where
         T: DeserializeOwned,
     {
-        de::Deserialize::deserialize(PathDeserializer::new(req))
+        de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
             .map(|inner| Path { inner })
     }
 }

@@ -31,6 +31,7 @@ actix-rt = "0.1.0"
 actix-server = "0.1.2"
 actix-utils = "0.1.0"
 actix-http = { git = "https://github.com/fafhrd91/actix-http.git" }
+actix-router = { git = "https://github.com/actix/actix-net.git", features=["http"]  }
 
 bytes = "0.4"
 futures = "0.1"
