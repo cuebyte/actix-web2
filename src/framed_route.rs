@@ -76,7 +76,7 @@ where
     }
 }
 
-impl<Io, T, S> HttpServiceFactory<S, FramedRequest<S, Io>> for FramedRoute<Io, T, S>
+impl<Io, T, S> HttpServiceFactory<S> for FramedRoute<Io, T, S>
 where
     Io: AsyncRead + AsyncWrite + 'static,
     T: NewService<

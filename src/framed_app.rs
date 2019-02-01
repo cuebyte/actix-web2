@@ -44,7 +44,7 @@ impl<T: 'static, S: 'static> FramedApp<T, S> {
 
     pub fn service<U>(mut self, factory: U) -> Self
     where
-        U: HttpServiceFactory<S, FramedRequest<S, T>>,
+        U: HttpServiceFactory<S>,
         U::Factory: NewService<Request = FramedRequest<S, T>, Response = ()> + 'static,
         <U::Factory as NewService>::Future: 'static,
         <U::Factory as NewService>::Service: Service<Request = FramedRequest<S, T>>,
@@ -60,7 +60,7 @@ impl<T: 'static, S: 'static> FramedApp<T, S> {
 
     pub fn register_service<U>(&mut self, factory: U)
     where
-        U: HttpServiceFactory<S, FramedRequest<S, T>>,
+        U: HttpServiceFactory<S>,
         U::Factory: NewService<Request = FramedRequest<S, T>, Response = ()> + 'static,
         <U::Factory as NewService>::Future: 'static,
         <U::Factory as NewService>::Service: Service<Request = FramedRequest<S, T>>,

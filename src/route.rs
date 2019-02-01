@@ -1,19 +1,15 @@
 use std::marker::PhantomData;
 
 use actix_http::http::{HeaderName, HeaderValue, Method};
-use actix_http::{Error, Request, Response};
+use actix_http::{Error, Response};
 use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
-use actix_router::Path;
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
 use super::app::{HttpServiceFactory, State};
 use super::handler::{
     AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, ServiceRequest,
 };
-// use super::param::Params;
-use super::request::Request as WebRequest;
 use super::responder::Responder;
-use super::url::Url;
 
 /// Resource route definition
 ///
@@ -75,7 +71,7 @@ where
     }
 }
 
-impl<T, S> HttpServiceFactory<S, Request> for Route<T, S>
+impl<T, S> HttpServiceFactory<S> for Route<T, S>
 where
     T: NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>
         + 'static,
@@ -112,7 +108,7 @@ where
         + 'static,
     T::Service: 'static,
 {
-    type Request = Request;
+    type Request = ServiceRequest<S>;
     type Response = T::Response;
     type Error = T::Error;
     type InitError = T::InitError;
@@ -172,7 +168,7 @@ where
     T: Service<Request = ServiceRequest<S>, Response = Response, Error = Error>
         + 'static,
 {
-    type Request = Request;
+    type Request = ServiceRequest<S>;
     type Response = T::Response;
     type Error = T::Error;
     type Future = T::Future;
@@ -181,12 +177,8 @@ where
         self.service.poll_ready()
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
-        self.service.call(ServiceRequest::new(WebRequest::new(
-            self.state.clone(),
-            req,
-            Path::new(Url::default()),
-        )))
+    fn call(&mut self, req: ServiceRequest<S>) -> Self::Future {
+        self.service.call(req)
     }
 }
 

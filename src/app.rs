@@ -19,8 +19,8 @@ use crate::url::Url;
 
 type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
 
-pub trait HttpServiceFactory<S, Request> {
-    type Factory: NewService<Request = Request>;
+pub trait HttpServiceFactory<S> {
+    type Factory: NewService;
 
     fn path(&self) -> &str;
 
@@ -93,7 +93,7 @@ impl<S: 'static> App<S> {
 
     pub fn service<T>(mut self, factory: T) -> Self
     where
-        T: HttpServiceFactory<S, ServiceRequest<S>>,
+        T: HttpServiceFactory<S>,
         T::Factory:
             NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>
                 + 'static,
