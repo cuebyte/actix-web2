@@ -5,12 +5,11 @@ use actix_http::dev::Payload;
 use actix_http::http::HeaderMap;
 use actix_http::Request as BaseRequest;
 use actix_http::{Error, HttpMessage};
-use actix_router::Path;
+use actix_router::{Path, Url};
 use futures::future::{ok, FutureResult};
 
 use crate::app::State;
 use crate::handler::FromRequest;
-use crate::url::Url;
 
 pub struct Request<S = ()> {
     base: BaseRequest,

@@ -6,7 +6,6 @@ mod request;
 mod responder;
 mod route;
 pub mod test;
-mod url;
 
 mod framed_app;
 mod framed_handler;

@@ -9,11 +9,10 @@ use actix_http::dev::Payload;
 use actix_http::http::header::{Header, HeaderName, IntoHeaderValue};
 use actix_http::http::{HeaderMap, HttpTryFrom, Method, Uri, Version};
 use actix_http::Request as HttpRequest;
-use actix_router::Path;
+use actix_router::{Path, Url};
 
 use crate::app::State;
 use crate::request::Request;
-use crate::url::Url;
 
 /// Test `Request` builder
 ///

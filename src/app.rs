@@ -5,7 +5,7 @@ use std::rc::Rc;
 use actix_http::{Error, Request, Response};
 use actix_net::cloneable::CloneableService;
 use actix_net::service::{IntoNewService, NewService, Service};
-use actix_router::{Path, ResourceInfo, Router};
+use actix_router::{Path, ResourceInfo, Router, Url};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 
@@ -15,7 +15,6 @@ use crate::helpers::{
     HttpDefaultNewService, HttpDefaultService,
 };
 use crate::request::Request as WebRequest;
-use crate::url::Url;
 
 type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
 

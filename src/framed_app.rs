@@ -6,7 +6,7 @@ use actix_http::{Request, Response, SendResponse};
 use actix_net::cloneable::CloneableService;
 use actix_net::codec::Framed;
 use actix_net::service::{IntoNewService, NewService, Service};
-use actix_router::{Path, Router};
+use actix_router::{Path, Router, Url};
 use futures::{Async, Future, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
 
@@ -14,7 +14,6 @@ use crate::app::{HttpServiceFactory, State};
 use crate::framed_handler::FramedRequest;
 use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpNewService};
 use crate::request::Request as WebRequest;
-use crate::url::Url;
 
 pub type FRequest<T> = (Request, Framed<T, Codec>);
 type BoxedResponse = Box<Future<Item = (), Error = ()>>;
