@@ -24,9 +24,13 @@ name = "actix_web2"
 path = "src/lib.rs"
 
 [dependencies]
-actix = "0.7"
-actix-net = "0.2.6"
-actix-http = { git = "https://github.com/actix/actix-http.git", branch="stable-0.2" }
+actix-codec = "0.1.0"
+actix-service = "0.2.1"
+actix-connector = "0.1.0"
+actix-server = "0.2.0"
+actix-utils = "0.2.1"
+actix-rt = "0.1.0"
+actix-http = { git = "https://github.com/actix/actix-http.git" }
 actix-router = { git = "https://github.com/actix/actix-net.git" }
 
 bytes = "0.4"

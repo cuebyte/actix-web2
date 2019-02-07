@@ -1,5 +1,5 @@
 use actix_http::Response;
-use actix_net::service::{NewService, Service};
+use actix_service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Future, Poll};
 

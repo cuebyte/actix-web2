@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use actix_http::http::{HeaderName, HeaderValue, Method};
 use actix_http::Error;
-use actix_net::service::{IntoNewService, NewService, NewServiceExt, Service};
+use actix_service::{IntoNewService, NewService, NewServiceExt, Service};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 use log::{debug, error};
 use tokio_io::{AsyncRead, AsyncWrite};

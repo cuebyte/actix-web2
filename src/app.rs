@@ -3,9 +3,9 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use actix_http::{Error, Request, Response};
-use actix_net::cloneable::CloneableService;
-use actix_net::service::{IntoNewService, NewService, Service};
 use actix_router::{Path, ResourceInfo, Router, Url};
+use actix_service::{IntoNewService, NewService, Service};
+use actix_utils::cloneable::CloneableService;
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, Poll};
 

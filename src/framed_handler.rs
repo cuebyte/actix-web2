@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use actix_codec::Framed;
 use actix_http::{h1::Codec, Error};
-use actix_net::codec::Framed;
-use actix_net::service::{NewService, Service};
+use actix_service::{NewService, Service};
 use futures::future::{ok, FutureResult};
 use futures::{Async, Future, IntoFuture, Poll};
 use log::error;

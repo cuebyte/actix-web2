@@ -1,12 +1,12 @@
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use actix_codec::Framed;
 use actix_http::h1::Codec;
 use actix_http::{Request, Response, SendResponse};
-use actix_net::cloneable::CloneableService;
-use actix_net::codec::Framed;
-use actix_net::service::{IntoNewService, NewService, Service};
 use actix_router::{Path, Router, Url};
+use actix_service::{IntoNewService, NewService, Service};
+use actix_utils::cloneable::CloneableService;
 use futures::{Async, Future, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
 

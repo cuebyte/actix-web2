@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use actix_http::{Error, Response};
-use actix_net::service::{NewService, Service};
+use actix_service::{NewService, Service};
 use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
