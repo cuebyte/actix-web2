@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use actix_http::http::{HeaderName, HeaderValue, Method};
 use actix_http::{Error, Response};
-use actix_service::{IntoNewService, NewService, NewServiceExt, Service};
+use actix_service::{IntoNewService, NewService, Service};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
 use super::app::{HttpServiceFactory, State};
@@ -71,7 +71,7 @@ where
     }
 }
 
-impl<T, S> HttpServiceFactory<S> for Route<T, S>
+impl<T, S> HttpServiceFactory<S, ServiceRequest<S>> for Route<T, S>
 where
     T: NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>
         + 'static,

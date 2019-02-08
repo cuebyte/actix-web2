@@ -1,10 +1,13 @@
+use std::cell::{Ref, RefCell, RefMut};
 use std::fmt;
 use std::ops::Deref;
+use std::rc::Rc;
 
-use actix_http::dev::Payload;
-use actix_http::http::HeaderMap;
-use actix_http::Request as BaseRequest;
-use actix_http::{Error, HttpMessage};
+use actix_http::http::{HeaderMap, Method, Uri, Version};
+use actix_http::payload::Payload;
+use actix_http::{
+    Error, Extensions, HttpMessage, Message, Request as BaseRequest, RequestHead,
+};
 use actix_router::{Path, Url};
 use futures::future::{ok, FutureResult};
 
@@ -12,23 +15,31 @@ use crate::app::State;
 use crate::handler::FromRequest;
 
 pub struct Request<S = ()> {
-    base: BaseRequest,
+    head: Message<RequestHead>,
     path: Path<Url>,
     state: State<S>,
+    payload: Option<Rc<RefCell<Option<Payload>>>>,
 }
 
 impl<S> Request<S> {
     #[inline]
-    pub fn new(state: State<S>, base: BaseRequest, path: Path<Url>) -> Request<S> {
-        Request { base, path, state }
+    pub fn new(state: State<S>, path: Path<Url>, request: BaseRequest) -> Request<S> {
+        let (head, payload) = request.into_parts();
+        Request {
+            head,
+            path,
+            state,
+            payload: payload.map(|p| Rc::new(RefCell::new(Some(p)))),
+        }
     }
 
     /// Construct new http request with empty state.
-    pub fn drop_state(&self) -> Request<()> {
+    pub fn drop_state(self) -> Request<()> {
         Request {
             state: State::new(()),
-            base: self.base.clone_request(),
-            path: self.path.clone(),
+            head: self.head,
+            path: self.path,
+            payload: self.payload,
         }
     }
 
@@ -43,10 +54,40 @@ impl<S> Request<S> {
         self.state.clone()
     }
 
-    /// This method returns reference to current base `Request` object.
+    /// This method returns reference to the request head
     #[inline]
-    pub fn request(&self) -> &BaseRequest {
-        &self.base
+    pub fn head(&self) -> &RequestHead {
+        &self.head
+    }
+
+    /// Request's uri.
+    #[inline]
+    pub fn uri(&self) -> &Uri {
+        &self.head().uri
+    }
+
+    /// Read the Request method.
+    #[inline]
+    pub fn method(&self) -> &Method {
+        &self.head().method
+    }
+
+    /// Read the Request Version.
+    #[inline]
+    pub fn version(&self) -> Version {
+        self.head().version
+    }
+
+    /// The target path of this Request.
+    #[inline]
+    pub fn path(&self) -> &str {
+        self.head().uri.path()
+    }
+
+    #[inline]
+    /// Returns Request's headers.
+    pub fn headers(&self) -> &HeaderMap {
+        &self.head().headers
     }
 
     /// The query string in the URL.
@@ -71,23 +112,36 @@ impl<S> Request<S> {
     pub fn match_info(&self) -> &Path<Url> {
         &self.path
     }
+
+    /// Request extensions
+    #[inline]
+    pub fn extensions(&self) -> Ref<Extensions> {
+        self.head.extensions()
+    }
+
+    /// Mutable reference to a the request's extensions
+    #[inline]
+    pub fn extensions_mut(&self) -> RefMut<Extensions> {
+        self.head.extensions_mut()
+    }
 }
 
 impl<S> Clone for Request<S> {
     fn clone(&self) -> Request<S> {
         Request {
-            base: self.base.clone_request(),
+            head: self.head.clone(),
             path: self.path.clone(),
             state: self.state.clone(),
+            payload: self.payload.clone(),
         }
     }
 }
 
 impl<S> Deref for Request<S> {
-    type Target = BaseRequest;
+    type Target = RequestHead;
 
-    fn deref(&self) -> &BaseRequest {
-        self.request()
+    fn deref(&self) -> &RequestHead {
+        self.head()
     }
 }
 
@@ -96,12 +150,16 @@ impl<S> HttpMessage for Request<S> {
 
     #[inline]
     fn headers(&self) -> &HeaderMap {
-        self.request().headers()
+        &self.head.headers
     }
 
     #[inline]
-    fn payload(&self) -> Payload {
-        self.request().payload()
+    fn payload(&self) -> Option<Payload> {
+        if let Some(ref pl) = self.payload {
+            pl.as_ref().borrow_mut().take()
+        } else {
+            None
+        }
     }
 }
 
@@ -121,8 +179,8 @@ impl<S> fmt::Debug for Request<S> {
         writeln!(
             f,
             "\nRequest {:?} {}:{}",
-            self.version(),
-            self.method(),
+            self.head.version,
+            self.head.method,
             self.path()
         )?;
         if !self.query_string().is_empty() {

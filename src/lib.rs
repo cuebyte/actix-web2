@@ -5,13 +5,8 @@ mod helpers;
 mod request;
 mod responder;
 mod route;
-pub mod test;
 
-mod framed_app;
-mod framed_handler;
-mod framed_route;
-
-// re-export for convinience
+// re-export for convenience
 pub use actix_http::{http, Error, HttpMessage, Response, ResponseError};
 
 pub use crate::app::{App, AppService, State};
@@ -23,12 +18,4 @@ pub use crate::route::Route;
 
 pub mod dev {
     pub use crate::handler::{AsyncFactory, Extract, Factory, Handle};
-}
-
-pub mod framed {
-    pub use super::framed_app::{FramedApp, FramedAppService};
-    pub use super::framed_handler::{
-        FramedError, FramedExtract, FramedFactory, FramedHandle, FramedRequest,
-    };
-    pub use super::framed_route::FramedRoute;
 }

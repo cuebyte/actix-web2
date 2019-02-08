@@ -18,8 +18,8 @@ use crate::request::Request as WebRequest;
 
 type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
 
-pub trait HttpServiceFactory<S> {
-    type Factory: NewService;
+pub trait HttpServiceFactory<S, Request> {
+    type Factory: NewService<Request = Request>;
 
     fn path(&self) -> &str;
 
@@ -72,6 +72,8 @@ pub struct App<S = ()> {
 }
 
 impl App<()> {
+    /// Create application with empty state. Application can
+    /// be configured with a builder-like pattern.
     pub fn new() -> Self {
         App {
             services: Vec::new(),
@@ -81,8 +83,26 @@ impl App<()> {
     }
 }
 
+impl Default for App<()> {
+    fn default() -> Self {
+        App::new()
+    }
+}
+
 impl<S: 'static> App<S> {
-    pub fn with(state: S) -> Self {
+    /// Create application with specified state. Application can be
+    /// configured with a builder-like pattern.
+    ///
+    /// State is shared with all resources within same application and
+    /// could be accessed with `HttpRequest::state()` method.
+    ///
+    /// **Note**: http server accepts an application factory rather than
+    /// an application instance. Http server constructs an application
+    /// instance for each thread, thus application state must be constructed
+    /// multiple times. If you want to share state between different
+    /// threads, a shared object should be used, e.g. `Arc`. Application
+    /// state does not need to be `Send` or `Sync`.
+    pub fn with_state(state: S) -> Self {
         App {
             services: Vec::new(),
             default: Box::new(DefaultNewService::new(not_found.into_new_service())),
@@ -90,14 +110,18 @@ impl<S: 'static> App<S> {
         }
     }
 
+    /// Get reference to the application state
+    pub fn state(&self) -> &S {
+        &self.state
+    }
+
     pub fn service<T>(mut self, factory: T) -> Self
     where
-        T: HttpServiceFactory<S>,
+        T: HttpServiceFactory<S, ServiceRequest<S>>,
         T::Factory:
             NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>
                 + 'static,
         <T::Factory as NewService>::Future: 'static,
-        <T::Factory as NewService>::Service: Service<Request = ServiceRequest<S>>,
         <<T::Factory as NewService>::Service as Service>::Future: 'static,
     {
         let path = factory.path().to_string();
@@ -108,6 +132,7 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Default resource to be used if no matching route could be found.
     pub fn default_service<T, F: IntoNewService<T>>(mut self, factory: F) -> Self
     where
         T: NewService<Request = ServiceRequest<S>, Response = Response> + 'static,
@@ -115,6 +140,42 @@ impl<S: 'static> App<S> {
         <T::Service as Service>::Future: 'static,
     {
         self.default = Box::new(DefaultNewService::new(factory.into_new_service()));
+        self
+    }
+
+    /// Register an external resource.
+    ///
+    /// External resources are useful for URL generation purposes only
+    /// and are never considered for matching at request time. Calls to
+    /// `HttpRequest::url_for()` will work as expected.
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// use actix_web::{App, HttpRequest, HttpResponse, Result};
+    ///
+    /// fn index(req: &HttpRequest) -> Result<HttpResponse> {
+    ///     let url = req.url_for("youtube", &["oHg5SJYRHA0"])?;
+    ///     assert_eq!(url.as_str(), "https://youtube.com/watch/oHg5SJYRHA0");
+    ///     Ok(HttpResponse::Ok().into())
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new()
+    ///         .resource("/index.html", |r| r.get().f(index))
+    ///         .external_resource("youtube", "https://youtube.com/watch/{video_id}")
+    ///         .finish();
+    /// }
+    /// ```
+    pub fn external_resource<T, U>(mut self, name: T, url: U) -> App<S>
+    where
+        T: AsRef<str>,
+        U: AsRef<str>,
+    {
+        // self.parts
+        //     .as_mut()
+        //     .expect("Use after finish")
+        //     .router
+        //     .register_external(name.as_ref(), ResourceDef::external(url.as_ref()));
         self
     }
 }
@@ -263,20 +324,23 @@ impl<S> Service for AppService<S> {
         if let Some((srv, _info)) = self.router.recognize_mut(&mut path) {
             srv.call(ServiceRequest::new(WebRequest::new(
                 self.state.clone(),
-                req,
                 path,
+                req,
             )))
         } else {
             self.default.call(ServiceRequest::new(WebRequest::new(
                 self.state.clone(),
-                req,
                 path,
+                req,
             )))
         }
     }
 }
 
-struct HttpNewService<S, T: NewService<Request = ServiceRequest<S>, Error = Error>>(T);
+struct HttpNewService<S, T: NewService<Request = ServiceRequest<S>, Error = Error>>(
+    T,
+    PhantomData<(S,)>,
+);
 
 impl<S, T> HttpNewService<S, T>
 where
@@ -286,7 +350,7 @@ where
     <T::Service as Service>::Future: 'static,
 {
     pub fn new(service: T) -> Self {
-        HttpNewService(service)
+        HttpNewService(service, PhantomData)
     }
 }
 
@@ -294,11 +358,11 @@ impl<S, T> NewService for HttpNewService<S, T>
 where
     S: 'static,
     T: NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>,
-    T::Request: 'static,
     T::Response: 'static,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
+    // Request: 'static,
 {
     type Request = T::Request;
     type Response = T::Response;
@@ -318,7 +382,7 @@ where
     }
 }
 
-struct HttpServiceWrapper<S, T: Service<Request = ServiceRequest<S>>> {
+struct HttpServiceWrapper<S, T: Service> {
     service: T,
     _t: PhantomData<(S,)>,
 }
