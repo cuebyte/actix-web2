@@ -11,8 +11,8 @@ use actix_http::{
 use actix_router::{Path, Url};
 use futures::future::{ok, FutureResult};
 
-use crate::app::State;
 use crate::handler::FromRequest;
+use crate::state::State;
 
 pub struct Request<S = ()> {
     head: Message<RequestHead>,

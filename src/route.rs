@@ -1,11 +1,10 @@
 use std::marker::PhantomData;
 
-use actix_http::http::{HeaderName, HeaderValue, Method};
-use actix_http::{Error, Response};
+use actix_http::{http::Method, Error, Response};
 use actix_service::{IntoNewService, NewService, Service};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
-use super::app::{HttpServiceFactory, State};
+use super::app::HttpServiceFactory;
 use super::handler::{
     AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, ServiceRequest,
 };
@@ -19,7 +18,6 @@ pub struct Route<T, S = ()> {
     service: T,
     pattern: String,
     methods: Vec<Method>,
-    headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<S>,
 }
 
@@ -54,7 +52,6 @@ where
         Route {
             pattern: pattern.to_owned(),
             service: factory.into_new_service(),
-            headers: Vec::new(),
             methods: Vec::new(),
             state: PhantomData,
         }
@@ -64,14 +61,9 @@ where
         self.methods.push(method);
         self
     }
-
-    pub fn header(mut self, name: HeaderName, value: HeaderValue) -> Self {
-        self.headers.push((name, value));
-        self
-    }
 }
 
-impl<T, S> HttpServiceFactory<S, ServiceRequest<S>> for Route<T, S>
+impl<T, S> HttpServiceFactory<ServiceRequest<S>> for Route<T, S>
 where
     T: NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>
         + 'static,
@@ -83,13 +75,12 @@ where
         &self.pattern
     }
 
-    fn create(self, state: State<S>) -> Self::Factory {
+    fn create(self) -> Self::Factory {
         RouteFactory {
-            state,
             service: self.service,
             pattern: self.pattern,
             methods: self.methods,
-            headers: self.headers,
+            state: PhantomData,
         }
     }
 }
@@ -98,8 +89,7 @@ pub struct RouteFactory<T, S> {
     service: T,
     pattern: String,
     methods: Vec<Method>,
-    headers: Vec<(HeaderName, HeaderValue)>,
-    state: State<S>,
+    state: PhantomData<S>,
 }
 
 impl<T, S> NewService for RouteFactory<T, S>
@@ -120,8 +110,7 @@ where
             fut: self.service.new_service(),
             pattern: self.pattern.clone(),
             methods: self.methods.clone(),
-            headers: self.headers.clone(),
-            state: self.state.clone(),
+            state: PhantomData,
         }
     }
 }
@@ -130,8 +119,7 @@ pub struct CreateRouteService<T: NewService<Request = ServiceRequest<S>>, S> {
     fut: T::Future,
     pattern: String,
     methods: Vec<Method>,
-    headers: Vec<(HeaderName, HeaderValue)>,
-    state: State<S>,
+    state: PhantomData<S>,
 }
 
 impl<T, S> Future for CreateRouteService<T, S>
@@ -147,10 +135,9 @@ where
 
         Ok(Async::Ready(RouteService {
             service,
-            state: self.state.clone(),
             pattern: self.pattern.clone(),
             methods: self.methods.clone(),
-            headers: self.headers.clone(),
+            state: PhantomData,
         }))
     }
 }
@@ -159,8 +146,7 @@ pub struct RouteService<T, S> {
     service: T,
     pattern: String,
     methods: Vec<Method>,
-    headers: Vec<(HeaderName, HeaderValue)>,
-    state: State<S>,
+    state: PhantomData<S>,
 }
 
 impl<T, S> Service for RouteService<T, S>
@@ -193,7 +179,6 @@ where
 //         {
 //             if let Some(params) = self.pattern.match_with_params(&req, 0) {
 //                 return Ok(self.service.call(ServiceRequest::new(WebRequest::new(
-//                     self.state.clone(),
 //                     req,
 //                     params,
 //                 ))));
@@ -206,7 +191,6 @@ where
 pub struct RoutePatternBuilder<S> {
     pattern: String,
     methods: Vec<Method>,
-    headers: Vec<(HeaderName, HeaderValue)>,
     state: PhantomData<S>,
 }
 
@@ -215,7 +199,6 @@ impl<S> RoutePatternBuilder<S> {
         RoutePatternBuilder {
             pattern: path.to_string(),
             methods: Vec::new(),
-            headers: Vec::new(),
             state: PhantomData,
         }
     }
@@ -237,8 +220,7 @@ impl<S> RoutePatternBuilder<S> {
             service: md.into_new_service(),
             pattern: self.pattern,
             methods: self.methods,
-            headers: self.headers,
-            state: PhantomData,
+            _t: PhantomData,
         }
     }
 
@@ -263,7 +245,6 @@ impl<S> RoutePatternBuilder<S> {
             service: Extract::new(P::Config::default()).and_then(Handle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
-            headers: self.headers,
             state: PhantomData,
         }
     }
@@ -291,7 +272,6 @@ impl<S> RoutePatternBuilder<S> {
             service: Extract::new(P::Config::default()).then(AsyncHandle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
-            headers: self.headers,
             state: PhantomData,
         }
     }
@@ -301,8 +281,7 @@ pub struct RouteBuilder<T, S, U1, U2> {
     service: T,
     pattern: String,
     methods: Vec<Method>,
-    headers: Vec<(HeaderName, HeaderValue)>,
-    state: PhantomData<(S, U1, U2)>,
+    _t: PhantomData<(S, U1, U2)>,
 }
 
 impl<T, S, U1, U2> RouteBuilder<T, S, U1, U2>
@@ -319,8 +298,7 @@ where
             service: factory.into_new_service(),
             pattern: path.to_string(),
             methods: Vec::new(),
-            headers: Vec::new(),
-            state: PhantomData,
+            _t: PhantomData,
         }
     }
 
@@ -357,8 +335,7 @@ where
                 .and_then(md.into_new_service().map_err(|e| e.into())),
             pattern: self.pattern,
             methods: self.methods,
-            headers: self.headers,
-            state: PhantomData,
+            _t: PhantomData,
         }
     }
 
@@ -388,7 +365,6 @@ where
                 .then(AsyncHandle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
-            headers: self.headers,
             state: PhantomData,
         }
     }
@@ -417,7 +393,6 @@ where
                 .and_then(Handle::new(handler)),
             pattern: self.pattern,
             methods: self.methods,
-            headers: self.headers,
             state: PhantomData,
         }
     }

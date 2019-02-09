@@ -1,15 +1,8 @@
-extern crate actix;
-extern crate actix_http;
-extern crate actix_net;
-extern crate actix_web2;
-extern crate env_logger;
-extern crate futures;
-
 use futures::IntoFuture;
 
 use actix_http::h1;
-use actix_net::server::Server;
-use actix_net::service::NewServiceExt;
+use actix_server::Server;
+use actix_service::NewService;
 use actix_web2::{App, Error, Request, Route};
 
 fn index(req: Request) -> &'static str {
@@ -27,11 +20,11 @@ fn no_params() -> &'static str {
 }
 
 fn main() {
-    ::std::env::set_var("RUST_LOG", "actix_net=info,actix_web2=info");
+    ::std::env::set_var("RUST_LOG", "actix_server=info,actix_web2=info");
     env_logger::init();
-    let sys = actix::System::new("hello-world");
+    let sys = actix_rt::System::new("hello-world");
 
-    Server::default()
+    Server::build()
         .bind("test", "127.0.0.1:8080", || {
             h1::H1Service::new(
                 App::new()
@@ -43,6 +36,7 @@ fn main() {
             .map(|_| ())
         })
         .unwrap()
+        .workers(1)
         .start();
 
     let _ = sys.run();
