@@ -23,7 +23,7 @@ use actix_http::{HttpMessage, Response};
 use actix_router::PathDeserializer;
 
 use crate::handler::FromRequest;
-use crate::request::Request;
+use crate::request::HttpRequest;
 use crate::responder::Responder;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -110,7 +110,7 @@ impl<T> Path<T> {
     }
 
     /// Extract path information from a request
-    pub fn extract<S>(req: &Request<S>) -> Result<Path<T>, de::value::Error>
+    pub fn extract<S>(req: &HttpRequest<S>) -> Result<Path<T>, de::value::Error>
     where
         T: DeserializeOwned,
     {
@@ -134,7 +134,7 @@ where
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, _: &Self::Config) -> Self::Future {
         Self::extract(req).map_err(ErrorNotFound).into_future()
     }
 }
@@ -221,7 +221,7 @@ where
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, _: &Self::Config) -> Self::Future {
         serde_urlencoded::from_str::<T>(req.query_string())
             .map(|val| ok(Query(val)))
             .unwrap_or_else(|e| err(e.into()))
@@ -302,7 +302,7 @@ where
     type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future {
         let req2 = req.clone();
         let err = Rc::clone(&cfg.ehandler);
         Box::new(
@@ -357,7 +357,7 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
 /// ```
 pub struct FormConfig<S> {
     limit: usize,
-    ehandler: Rc<Fn(UrlencodedError, &Request<S>) -> Error>,
+    ehandler: Rc<Fn(UrlencodedError, &HttpRequest<S>) -> Error>,
 }
 
 impl<S> FormConfig<S> {
@@ -370,7 +370,7 @@ impl<S> FormConfig<S> {
     /// Set custom error handler
     pub fn error_handler<F>(&mut self, f: F) -> &mut Self
     where
-        F: Fn(UrlencodedError, &Request<S>) -> Error + 'static,
+        F: Fn(UrlencodedError, &HttpRequest<S>) -> Error + 'static,
     {
         self.ehandler = Rc::new(f);
         self
@@ -489,7 +489,7 @@ impl<T: Serialize, S> Responder<S> for Json<T> {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         let body = match serde_json::to_string(&self.0) {
             Ok(body) => body,
             Err(e) => return err(e.into()),
@@ -511,7 +511,7 @@ where
     type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future {
         let req2 = req.clone();
         let err = Rc::clone(&cfg.ehandler);
         Box::new(
@@ -555,7 +555,7 @@ where
 /// ```
 pub struct JsonConfig<S> {
     limit: usize,
-    ehandler: Rc<Fn(JsonPayloadError, &Request<S>) -> Error>,
+    ehandler: Rc<Fn(JsonPayloadError, &HttpRequest<S>) -> Error>,
 }
 
 impl<S> JsonConfig<S> {
@@ -568,7 +568,7 @@ impl<S> JsonConfig<S> {
     /// Set custom error handler
     pub fn error_handler<F>(&mut self, f: F) -> &mut Self
     where
-        F: Fn(JsonPayloadError, &Request<S>) -> Error + 'static,
+        F: Fn(JsonPayloadError, &HttpRequest<S>) -> Error + 'static,
     {
         self.ehandler = Rc::new(f);
         self
@@ -615,7 +615,7 @@ impl<S: 'static> FromRequest<S> for Bytes {
         Either<Box<Future<Item = Bytes, Error = Error>>, FutureResult<Bytes, Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future {
         if let Err(e) = cfg.check_mimetype(req) {
             return Either::B(err(e));
         }
@@ -658,7 +658,7 @@ impl<S: 'static> FromRequest<S> for String {
         Either<Box<Future<Item = String, Error = Error>>, FutureResult<String, Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future {
         // check content-type
         if let Err(e) = cfg.check_mimetype(req) {
             return Either::B(err(e));
@@ -746,7 +746,7 @@ where
     type Future = Box<Future<Item = Option<T>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future {
         Box::new(T::from_request(req, cfg).then(|r| match r {
             Ok(v) => future::ok(Some(v)),
             Err(_) => future::ok(None),
@@ -810,7 +810,7 @@ where
     type Future = Box<Future<Item = Result<T, T::Error>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future {
         Box::new(T::from_request(req, cfg).then(|res| match res {
             Ok(v) => ok(Ok(v)),
             Err(e) => ok(Err(e)),
@@ -839,7 +839,7 @@ impl<S> PayloadConfig<S> {
         self
     }
 
-    fn check_mimetype(&self, req: &Request<S>) -> Result<(), Error> {
+    fn check_mimetype(&self, req: &HttpRequest<S>) -> Result<(), Error> {
         // check content-type
         if let Some(ref mt) = self.mimetype {
             match req.mime_type() {
@@ -879,7 +879,7 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
         type Error = Error;
         type Future = $fut_type<S, $($T),+>;
 
-        fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future {
+        fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future {
             $fut_type {
                 items: <($(Option<$T>,)+)>::default(),
                 futs: ($($T::from_request(req, &cfg.$n),)+),
@@ -931,7 +931,7 @@ impl<S> FromRequest<S> for () {
     type Error = Error;
     type Future = FutureResult<(), Error>;
 
-    fn from_request(_req: &Request<S>, _cfg: &Self::Config) -> Self::Future {
+    fn from_request(_req: &HttpRequest<S>, _cfg: &Self::Config) -> Self::Future {
         ok(())
     }
 }

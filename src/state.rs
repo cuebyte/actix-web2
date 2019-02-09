@@ -6,7 +6,7 @@ use futures::future::{ok, FutureResult};
 use futures::{Future, IntoFuture};
 
 use crate::handler::FromRequest;
-use crate::request::Request;
+use crate::request::HttpRequest;
 
 /// Application state
 pub struct State<S>(Rc<S>);
@@ -41,7 +41,7 @@ impl<S> FromRequest<S> for State<S> {
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, _: &Self::Config) -> Self::Future {
         ok(req.get_state())
     }
 }

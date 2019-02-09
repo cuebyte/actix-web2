@@ -4,11 +4,12 @@ use actix_http::{http::Method, Error, Response};
 use actix_service::{IntoNewService, NewService, Service};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
-use super::app::HttpServiceFactory;
-use super::handler::{
-    AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, ServiceRequest,
+use crate::app::HttpServiceFactory;
+use crate::handler::{
+    AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, HandlerRequest,
 };
-use super::responder::Responder;
+use crate::responder::Responder;
+use crate::service::{ServiceRequest, ServiceResponse};
 
 /// Resource route definition
 ///
@@ -65,7 +66,7 @@ where
 
 impl<T, S> HttpServiceFactory<ServiceRequest<S>> for Route<T, S>
 where
-    T: NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>
+    T: NewService<Request = HandlerRequest<S>, Response = Response, Error = Error>
         + 'static,
     T::Service: 'static,
 {
@@ -94,12 +95,12 @@ pub struct RouteFactory<T, S> {
 
 impl<T, S> NewService for RouteFactory<T, S>
 where
-    T: NewService<Request = ServiceRequest<S>, Response = Response, Error = Error>
+    T: NewService<Request = HandlerRequest<S>, Response = Response, Error = Error>
         + 'static,
     T::Service: 'static,
 {
     type Request = ServiceRequest<S>;
-    type Response = T::Response;
+    type Response = ServiceResponse;
     type Error = T::Error;
     type InitError = T::InitError;
     type Service = RouteService<T::Service, S>;
@@ -115,7 +116,7 @@ where
     }
 }
 
-pub struct CreateRouteService<T: NewService<Request = ServiceRequest<S>>, S> {
+pub struct CreateRouteService<T: NewService<Request = HandlerRequest<S>>, S> {
     fut: T::Future,
     pattern: String,
     methods: Vec<Method>,
@@ -124,7 +125,7 @@ pub struct CreateRouteService<T: NewService<Request = ServiceRequest<S>>, S> {
 
 impl<T, S> Future for CreateRouteService<T, S>
 where
-    T: NewService<Request = ServiceRequest<S>, Response = Response>,
+    T: NewService<Request = HandlerRequest<S>, Response = Response>,
     T::Error: Into<Error>,
 {
     type Item = RouteService<T::Service, S>;
@@ -151,42 +152,42 @@ pub struct RouteService<T, S> {
 
 impl<T, S> Service for RouteService<T, S>
 where
-    T: Service<Request = ServiceRequest<S>, Response = Response, Error = Error>
-        + 'static,
+    T: Service<Request = HandlerRequest<S>, Response = Response> + 'static,
 {
     type Request = ServiceRequest<S>;
-    type Response = T::Response;
+    type Response = ServiceResponse;
     type Error = T::Error;
-    type Future = T::Future;
+    type Future = RouteServiceResponse<T, S>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.service.poll_ready()
     }
 
     fn call(&mut self, req: ServiceRequest<S>) -> Self::Future {
-        self.service.call(req)
+        RouteServiceResponse {
+            fut: self.service.call(HandlerRequest::new(req.into_request())),
+            _t: PhantomData,
+        }
     }
 }
 
-// impl<T, S> HttpService<Request> for RouteService<T, S>
-// where
-//     T: Service<ServiceRequest<S>, Response = Response, Error = Error> + 'static,
-//     S: 'static,
-// {
-//     fn handle(&mut self, req: Request) -> Result<Self::Future, Request> {
-//         if self.methods.is_empty()
-//             || !self.methods.is_empty() && self.methods.contains(req.method())
-//         {
-//             if let Some(params) = self.pattern.match_with_params(&req, 0) {
-//                 return Ok(self.service.call(ServiceRequest::new(WebRequest::new(
-//                     req,
-//                     params,
-//                 ))));
-//             }
-//         }
-//         Err(req)
-//     }
-// }
+pub struct RouteServiceResponse<T: Service, S> {
+    fut: T::Future,
+    _t: PhantomData<S>,
+}
+
+impl<T, S> Future for RouteServiceResponse<T, S>
+where
+    T: Service<Request = HandlerRequest<S>, Response = Response>,
+{
+    type Item = ServiceResponse;
+    type Error = T::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let res = try_ready!(self.fut.poll());
+        Ok(Async::Ready(res.into()))
+    }
+}
 
 pub struct RoutePatternBuilder<S> {
     pattern: String,
@@ -208,11 +209,11 @@ impl<S> RoutePatternBuilder<S> {
         self
     }
 
-    pub fn map<T, U, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S, (), U>
+    pub fn and_then<T, U, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S, (), U>
     where
         T: NewService<
-            Request = ServiceRequest<S>,
-            Response = ServiceRequest<S, U>,
+            Request = HandlerRequest<S>,
+            Response = HandlerRequest<S, U>,
             InitError = (),
         >,
     {
@@ -229,7 +230,7 @@ impl<S> RoutePatternBuilder<S> {
         handler: F,
     ) -> Route<
         impl NewService<
-            Request = ServiceRequest<S>,
+            Request = HandlerRequest<S>,
             Response = Response,
             Error = Error,
             InitError = (),
@@ -249,12 +250,12 @@ impl<S> RoutePatternBuilder<S> {
         }
     }
 
-    pub fn with<F, P, R, I, E>(
+    pub fn with<F, P, R>(
         self,
         handler: F,
     ) -> Route<
         impl NewService<
-            Request = ServiceRequest<S>,
+            Request = HandlerRequest<S>,
             Response = Response,
             Error = Error,
             InitError = (),
@@ -262,11 +263,11 @@ impl<S> RoutePatternBuilder<S> {
         S,
     >
     where
-        F: AsyncFactory<S, (), P, R, I, E>,
+        F: AsyncFactory<S, (), P, R>,
         P: FromRequest<S> + 'static,
-        R: IntoFuture<Item = I, Error = E>,
-        I: Into<Response>,
-        E: Into<Error>,
+        R: IntoFuture,
+        R::Item: Into<Response>,
+        R::Error: Into<Error>,
     {
         Route {
             service: Extract::new(P::Config::default()).then(AsyncHandle::new(handler)),
@@ -287,8 +288,8 @@ pub struct RouteBuilder<T, S, U1, U2> {
 impl<T, S, U1, U2> RouteBuilder<T, S, U1, U2>
 where
     T: NewService<
-        Request = ServiceRequest<S, U1>,
-        Response = ServiceRequest<S, U2>,
+        Request = HandlerRequest<S, U1>,
+        Response = HandlerRequest<S, U2>,
         Error = Error,
         InitError = (),
     >,
@@ -307,13 +308,13 @@ where
         self
     }
 
-    pub fn map<T1, U3, F: IntoNewService<T1>>(
+    pub fn and_then<T1, U3, F: IntoNewService<T1>>(
         self,
         md: F,
     ) -> RouteBuilder<
         impl NewService<
-            Request = ServiceRequest<S, U1>,
-            Response = ServiceRequest<S, U3>,
+            Request = HandlerRequest<S, U1>,
+            Response = HandlerRequest<S, U3>,
             Error = Error,
             InitError = (),
         >,
@@ -323,8 +324,8 @@ where
     >
     where
         T1: NewService<
-            Request = ServiceRequest<S, U2>,
-            Response = ServiceRequest<S, U3>,
+            Request = HandlerRequest<S, U2>,
+            Response = HandlerRequest<S, U3>,
             InitError = (),
         >,
         T1::Error: Into<Error>,
@@ -339,12 +340,12 @@ where
         }
     }
 
-    pub fn with<F, P, R, I, E>(
+    pub fn with<F, P, R>(
         self,
         handler: F,
     ) -> Route<
         impl NewService<
-            Request = ServiceRequest<S, U1>,
+            Request = HandlerRequest<S, U1>,
             Response = Response,
             Error = Error,
             InitError = (),
@@ -352,11 +353,11 @@ where
         S,
     >
     where
-        F: AsyncFactory<S, U2, P, R, I, E>,
+        F: AsyncFactory<S, U2, P, R>,
         P: FromRequest<S> + 'static,
-        R: IntoFuture<Item = I, Error = E>,
-        I: Into<Response>,
-        E: Into<Error>,
+        R: IntoFuture,
+        R::Item: Into<Response>,
+        R::Error: Into<Error>,
     {
         Route {
             service: self
@@ -374,7 +375,7 @@ where
         handler: F,
     ) -> Route<
         impl NewService<
-            Request = ServiceRequest<S, U1>,
+            Request = HandlerRequest<S, U1>,
             Response = Response,
             Error = Error,
             InitError = (),

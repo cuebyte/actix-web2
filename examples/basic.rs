@@ -3,14 +3,14 @@ use futures::IntoFuture;
 use actix_http::h1;
 use actix_server::Server;
 use actix_service::NewService;
-use actix_web2::{App, Error, Request, Route};
+use actix_web2::{App, Error, HttpRequest, Route};
 
-fn index(req: Request) -> &'static str {
+fn index(req: HttpRequest) -> &'static str {
     println!("REQ: {:?}", req);
     "Hello world!\r\n"
 }
 
-fn index_async(req: Request) -> impl IntoFuture<Item = &'static str, Error = Error> {
+fn index_async(req: HttpRequest) -> impl IntoFuture<Item = &'static str, Error = Error> {
     println!("REQ: {:?}", req);
     Ok("Hello world!\r\n")
 }

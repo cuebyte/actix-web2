@@ -1,4 +1,8 @@
 #![allow(dead_code)]
+
+#[macro_use]
+extern crate derive_more;
+
 mod app;
 mod extractor;
 pub mod handler;
@@ -6,15 +10,17 @@ mod helpers;
 mod request;
 mod responder;
 mod route;
+mod service;
 mod state;
 
 // re-export for convenience
-pub use actix_http::{http, Error, HttpMessage, Response, ResponseError};
+pub use actix_http::Response as HttpResponse;
+pub use actix_http::{http, Error, HttpMessage, ResponseError};
 
 pub use crate::app::{App, AppService};
 pub use crate::extractor::{Form, Json, Path, Query};
 pub use crate::handler::FromRequest;
-pub use crate::request::Request;
+pub use crate::request::HttpRequest;
 pub use crate::responder::{Either, Responder};
 pub use crate::route::Route;
 pub use crate::state::State;

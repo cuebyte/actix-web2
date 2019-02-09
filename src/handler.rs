@@ -6,7 +6,7 @@ use actix_service::{NewService, Service};
 use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
-use crate::request::Request;
+use crate::request::HttpRequest;
 use crate::responder::{Responder, ResponseFuture};
 
 /// Trait implemented by types that can be extracted from request.
@@ -23,45 +23,45 @@ pub trait FromRequest<S>: Sized {
     type Future: Future<Item = Self, Error = Self::Error>;
 
     /// Convert request to a Self
-    fn from_request(req: &Request<S>, cfg: &Self::Config) -> Self::Future;
+    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future;
 
     /// Convert request to a Self
     ///
     /// This method uses default extractor configuration
-    fn extract(req: &Request<S>) -> Self::Future {
+    fn extract(req: &HttpRequest<S>) -> Self::Future {
         Self::from_request(req, &Self::Config::default())
     }
 }
 
-pub struct ServiceRequest<S, Ex = ()> {
-    req: Request<S>,
+pub struct HandlerRequest<S, Ex = ()> {
+    req: HttpRequest<S>,
     param: Ex,
 }
 
-impl<S> ServiceRequest<S, ()> {
-    pub fn new(req: Request<S>) -> Self {
+impl<S> HandlerRequest<S, ()> {
+    pub fn new(req: HttpRequest<S>) -> Self {
         Self { req, param: () }
     }
 }
 
-impl<S, Ex> ServiceRequest<S, Ex> {
-    pub fn request(&self) -> &Request<S> {
+impl<S, Ex> HandlerRequest<S, Ex> {
+    pub fn request(&self) -> &HttpRequest<S> {
         &self.req
     }
 
-    pub fn request_mut(&mut self) -> &mut Request<S> {
+    pub fn request_mut(&mut self) -> &mut HttpRequest<S> {
         &mut self.req
     }
 
-    pub fn into_parts(self) -> (Request<S>, Ex) {
+    pub fn into_parts(self) -> (HttpRequest<S>, Ex) {
         (self.req, self.param)
     }
 
-    pub fn map<Ex2, F>(self, op: F) -> ServiceRequest<S, Ex2>
+    pub fn map<Ex2, F>(self, op: F) -> HandlerRequest<S, Ex2>
     where
         F: FnOnce(Ex) -> Ex2,
     {
-        ServiceRequest {
+        HandlerRequest {
             req: self.req,
             param: op(self.param),
         }
@@ -113,7 +113,7 @@ where
     F: Factory<S, Ex, T, R>,
     R: Responder<S> + 'static,
 {
-    type Request = (T, ServiceRequest<S, Ex>);
+    type Request = (T, HandlerRequest<S, Ex>);
     type Response = Response;
     type Error = Error;
     type InitError = ();
@@ -143,7 +143,7 @@ where
     F: Factory<S, Ex, T, R>,
     R: Responder<S> + 'static,
 {
-    type Request = (T, ServiceRequest<S, Ex>);
+    type Request = (T, HandlerRequest<S, Ex>);
     type Response = Response;
     type Error = Error;
     type Future = ResponseFuture<R::Future>;
@@ -152,28 +152,28 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, (param, req): (T, ServiceRequest<S, Ex>)) -> Self::Future {
+    fn call(&mut self, (param, req): (T, HandlerRequest<S, Ex>)) -> Self::Future {
         let (req, ex) = req.into_parts();
         ResponseFuture::new(self.hnd.call(param, ex).respond_to(req))
     }
 }
 
 /// Async handler converter factory
-pub trait AsyncFactory<S, Ex, T, R, I, E>: Clone + 'static
+pub trait AsyncFactory<S, Ex, T, R>: Clone + 'static
 where
-    R: IntoFuture<Item = I, Error = E>,
-    I: Into<Response>,
-    E: Into<Error>,
+    R: IntoFuture,
+    R::Item: Into<Response>,
+    R::Error: Into<Error>,
 {
     fn call(&self, param: T, extra: Ex) -> R;
 }
 
-impl<F, S, R, I, E> AsyncFactory<S, (), (), R, I, E> for F
+impl<F, S, R> AsyncFactory<S, (), (), R> for F
 where
     F: Fn() -> R + Clone + 'static,
-    R: IntoFuture<Item = I, Error = E>,
-    I: Into<Response>,
-    E: Into<Error>,
+    R: IntoFuture,
+    R::Item: Into<Response>,
+    R::Error: Into<Error>,
 {
     fn call(&self, _: (), _: ()) -> R {
         (self)()
@@ -181,23 +181,23 @@ where
 }
 
 #[doc(hidden)]
-pub struct AsyncHandle<F, S, Ex, T, R, I, E>
+pub struct AsyncHandle<F, S, Ex, T, R>
 where
-    F: AsyncFactory<S, Ex, T, R, I, E>,
-    R: IntoFuture<Item = I, Error = E>,
-    I: Into<Response>,
-    E: Into<Error>,
+    F: AsyncFactory<S, Ex, T, R>,
+    R: IntoFuture,
+    R::Item: Into<Response>,
+    R::Error: Into<Error>,
 {
     hnd: F,
-    _t: PhantomData<(S, Ex, T, R, I, E)>,
+    _t: PhantomData<(S, Ex, T, R)>,
 }
 
-impl<F, S, Ex, T, R, I, E> AsyncHandle<F, S, Ex, T, R, I, E>
+impl<F, S, Ex, T, R> AsyncHandle<F, S, Ex, T, R>
 where
-    F: AsyncFactory<S, Ex, T, R, I, E>,
-    R: IntoFuture<Item = I, Error = E>,
-    I: Into<Response>,
-    E: Into<Error>,
+    F: AsyncFactory<S, Ex, T, R>,
+    R: IntoFuture,
+    R::Item: Into<Response>,
+    R::Error: Into<Error>,
 {
     pub fn new(hnd: F) -> Self {
         AsyncHandle {
@@ -206,18 +206,18 @@ where
         }
     }
 }
-impl<F, S, Ex, T, R, I, E> NewService for AsyncHandle<F, S, Ex, T, R, I, E>
+impl<F, S, Ex, T, R> NewService for AsyncHandle<F, S, Ex, T, R>
 where
-    F: AsyncFactory<S, Ex, T, R, I, E>,
-    R: IntoFuture<Item = I, Error = E>,
-    I: Into<Response>,
-    E: Into<Error>,
+    F: AsyncFactory<S, Ex, T, R>,
+    R: IntoFuture,
+    R::Item: Into<Response>,
+    R::Error: Into<Error>,
 {
-    type Request = Result<(T, ServiceRequest<S, Ex>), Error>;
+    type Request = Result<(T, HandlerRequest<S, Ex>), Error>;
     type Response = Response;
     type Error = Error;
     type InitError = ();
-    type Service = AsyncHandleService<F, S, Ex, T, R, I, E>;
+    type Service = AsyncHandleService<F, S, Ex, T, R>;
     type Future = FutureResult<Self::Service, ()>;
 
     fn new_service(&self) -> Self::Future {
@@ -229,25 +229,25 @@ where
 }
 
 #[doc(hidden)]
-pub struct AsyncHandleService<F, S, Ex, T, R, I, E>
+pub struct AsyncHandleService<F, S, Ex, T, R>
 where
-    F: AsyncFactory<S, Ex, T, R, I, E>,
-    R: IntoFuture<Item = I, Error = E>,
-    I: Into<Response>,
-    E: Into<Error>,
+    F: AsyncFactory<S, Ex, T, R>,
+    R: IntoFuture,
+    R::Item: Into<Response>,
+    R::Error: Into<Error>,
 {
     hnd: F,
-    _t: PhantomData<(S, Ex, T, R, I, E)>,
+    _t: PhantomData<(S, Ex, T, R)>,
 }
 
-impl<F, S, Ex, T, R, I, E> Service for AsyncHandleService<F, S, Ex, T, R, I, E>
+impl<F, S, Ex, T, R> Service for AsyncHandleService<F, S, Ex, T, R>
 where
-    F: AsyncFactory<S, Ex, T, R, I, E>,
-    R: IntoFuture<Item = I, Error = E>,
-    I: Into<Response>,
-    E: Into<Error>,
+    F: AsyncFactory<S, Ex, T, R>,
+    R: IntoFuture,
+    R::Item: Into<Response>,
+    R::Error: Into<Error>,
 {
-    type Request = Result<(T, ServiceRequest<S, Ex>), Error>;
+    type Request = Result<(T, HandlerRequest<S, Ex>), Error>;
     type Response = Response;
     type Error = Error;
     type Future =
@@ -257,7 +257,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Result<(T, ServiceRequest<S, Ex>), Error>) -> Self::Future {
+    fn call(&mut self, req: Result<(T, HandlerRequest<S, Ex>), Error>) -> Self::Future {
         match req {
             Ok((param, req)) => {
                 let (_, extra) = req.into_parts();
@@ -289,8 +289,9 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let res = try_ready!(self.0.poll().map_err(|e| e.into()));
-        Ok(Async::Ready(res.into()))
+        Ok(Async::Ready(
+            try_ready!(self.0.poll().map_err(|e| e.into())).into(),
+        ))
     }
 }
 
@@ -317,8 +318,8 @@ impl<S, T, Ex> NewService for Extract<S, T, Ex>
 where
     T: FromRequest<S> + 'static,
 {
-    type Request = ServiceRequest<S, Ex>;
-    type Response = (T, ServiceRequest<S, Ex>);
+    type Request = HandlerRequest<S, Ex>;
+    type Response = (T, HandlerRequest<S, Ex>);
     type Error = Error;
     type InitError = ();
     type Service = ExtractService<S, T, Ex>;
@@ -344,8 +345,8 @@ impl<S, T, Ex> Service for ExtractService<S, T, Ex>
 where
     T: FromRequest<S> + 'static,
 {
-    type Request = ServiceRequest<S, Ex>;
-    type Response = (T, ServiceRequest<S, Ex>);
+    type Request = HandlerRequest<S, Ex>;
+    type Response = (T, HandlerRequest<S, Ex>);
     type Error = Error;
     type Future = ExtractResponse<S, T, Ex>;
 
@@ -353,7 +354,7 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: ServiceRequest<S, Ex>) -> Self::Future {
+    fn call(&mut self, req: HandlerRequest<S, Ex>) -> Self::Future {
         ExtractResponse {
             fut: T::from_request(req.request(), self.cfg.as_ref()),
             req: Some(req),
@@ -365,7 +366,7 @@ pub struct ExtractResponse<S, T, Ex>
 where
     T: FromRequest<S> + 'static,
 {
-    req: Option<ServiceRequest<S, Ex>>,
+    req: Option<HandlerRequest<S, Ex>>,
     fut: T::Future,
 }
 
@@ -373,7 +374,7 @@ impl<S, T, Ex> Future for ExtractResponse<S, T, Ex>
 where
     T: FromRequest<S> + 'static,
 {
-    type Item = (T, ServiceRequest<S, Ex>);
+    type Item = (T, HandlerRequest<S, Ex>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -393,12 +394,12 @@ macro_rules! factory_tuple ({ ($(($nex:tt, $Ex:ident)),+), $(($n:tt, $T:ident)),
         }
     }
 
-    impl<Func, S, $($Ex,)+ $($T,)+ Res, It, Err> AsyncFactory<S, ($($Ex,)+), ($($T,)+), Res, It, Err> for Func
+    impl<Func, S, $($Ex,)+ $($T,)+ Res> AsyncFactory<S, ($($Ex,)+), ($($T,)+), Res> for Func
     where Func: Fn($($Ex,)+ $($T,)+) -> Res + Clone + 'static,
         $($T: FromRequest<S> + 'static,)+
-          Res: IntoFuture<Item=It, Error=Err> + 'static,
-          It: Into<Response>,
-          Err: Into<Error>,
+          Res: IntoFuture + 'static,
+          Res::Item: Into<Response>,
+          Res::Error: Into<Error>,
     {
         fn call(&self, param: ($($T,)+), extra: ($($Ex,)+)) -> Res {
             (self)($(extra.$nex,)+ $(param.$n,)+)
@@ -417,12 +418,12 @@ macro_rules! factory_tuple_unit ({$(($n:tt, $T:ident)),+} => {
         }
     }
 
-    impl<Func, S, $($T,)+ Res, It, Err> AsyncFactory<S, (), ($($T,)+), Res, It, Err> for Func
+    impl<Func, S, $($T,)+ Res> AsyncFactory<S, (), ($($T,)+), Res> for Func
     where Func: Fn($($T,)+) -> Res + Clone + 'static,
         $($T: FromRequest<S> + 'static,)+
-          Res: IntoFuture<Item=It, Error=Err> + 'static,
-          It: Into<Response>,
-          Err: Into<Error>,
+          Res: IntoFuture + 'static,
+          Res::Item: Into<Response>,
+          Res::Error: Into<Error>,
     {
         fn call(&self, param: ($($T,)+), _: ()) -> Res {
             (self)($(param.$n,)+)

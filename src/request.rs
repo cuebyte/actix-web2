@@ -14,32 +14,26 @@ use futures::future::{ok, FutureResult};
 use crate::handler::FromRequest;
 use crate::state::State;
 
-pub struct Request<S = ()> {
+pub struct HttpRequest<S = ()> {
     head: Message<RequestHead>,
     path: Path<Url>,
     state: State<S>,
     payload: Option<Rc<RefCell<Option<Payload>>>>,
 }
 
-impl<S> Request<S> {
+impl<S> HttpRequest<S> {
     #[inline]
-    pub fn new(state: State<S>, path: Path<Url>, request: BaseRequest) -> Request<S> {
+    pub fn new(
+        state: State<S>,
+        path: Path<Url>,
+        request: BaseRequest,
+    ) -> HttpRequest<S> {
         let (head, payload) = request.into_parts();
-        Request {
+        HttpRequest {
             head,
             path,
             state,
             payload: payload.map(|p| Rc::new(RefCell::new(Some(p)))),
-        }
-    }
-
-    /// Construct new http request with empty state.
-    pub fn drop_state(self) -> Request<()> {
-        Request {
-            state: State::new(()),
-            head: self.head,
-            path: self.path,
-            payload: self.payload,
         }
     }
 
@@ -126,9 +120,9 @@ impl<S> Request<S> {
     }
 }
 
-impl<S> Clone for Request<S> {
-    fn clone(&self) -> Request<S> {
-        Request {
+impl<S> Clone for HttpRequest<S> {
+    fn clone(&self) -> HttpRequest<S> {
+        HttpRequest {
             head: self.head.clone(),
             path: self.path.clone(),
             state: self.state.clone(),
@@ -137,7 +131,7 @@ impl<S> Clone for Request<S> {
     }
 }
 
-impl<S> Deref for Request<S> {
+impl<S> Deref for HttpRequest<S> {
     type Target = RequestHead;
 
     fn deref(&self) -> &RequestHead {
@@ -145,7 +139,7 @@ impl<S> Deref for Request<S> {
     }
 }
 
-impl<S> HttpMessage for Request<S> {
+impl<S> HttpMessage for HttpRequest<S> {
     type Stream = Payload;
 
     #[inline]
@@ -163,18 +157,18 @@ impl<S> HttpMessage for Request<S> {
     }
 }
 
-impl<S> FromRequest<S> for Request<S> {
+impl<S> FromRequest<S> for HttpRequest<S> {
     type Config = ();
     type Error = Error;
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &Request<S>, _: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>, _: &Self::Config) -> Self::Future {
         ok(req.clone())
     }
 }
 
-impl<S> fmt::Debug for Request<S> {
+impl<S> fmt::Debug for HttpRequest<S> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(
             f,

@@ -5,9 +5,9 @@ use bytes::{Bytes, BytesMut};
 use futures::future::{err, ok, Either as EitherFuture, FutureResult};
 use futures::{Future, Poll};
 
-use crate::request::Request;
+use crate::request::HttpRequest;
 
-/// Trait implemented by types that generate responses for clients.
+/// Trait implemented by types that generate http responses.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
 pub trait Responder<S = ()> {
@@ -18,7 +18,7 @@ pub trait Responder<S = ()> {
     type Future: Future<Item = Response, Error = Self::Error>;
 
     /// Convert itself to `AsyncResult` or `Error`.
-    fn respond_to(self, req: Request<S>) -> Self::Future;
+    fn respond_to(self, req: HttpRequest<S>) -> Self::Future;
 }
 
 impl<S> Responder<S> for Response {
@@ -26,7 +26,7 @@ impl<S> Responder<S> for Response {
     type Future = FutureResult<Response, Error>;
 
     #[inline]
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         ok(self)
     }
 }
@@ -38,7 +38,7 @@ where
     type Error = T::Error;
     type Future = EitherFuture<T::Future, FutureResult<Response, T::Error>>;
 
-    fn respond_to(self, req: Request<S>) -> Self::Future {
+    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
         match self {
             Some(t) => EitherFuture::A(t.respond_to(req)),
             None => EitherFuture::B(ok(Response::build(StatusCode::NOT_FOUND)
@@ -56,7 +56,7 @@ where
     type Error = Error;
     type Future = EitherFuture<ResponseFuture<T::Future>, FutureResult<Response, Error>>;
 
-    fn respond_to(self, req: Request<S>) -> Self::Future {
+    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
         match self {
             Ok(val) => EitherFuture::A(ResponseFuture::new(val.respond_to(req))),
             Err(e) => EitherFuture::B(err(e.into())),
@@ -69,7 +69,7 @@ impl<S> Responder<S> for ResponseBuilder {
     type Future = FutureResult<Response, Error>;
 
     #[inline]
-    fn respond_to(mut self, _: Request<S>) -> Self::Future {
+    fn respond_to(mut self, _: HttpRequest<S>) -> Self::Future {
         ok(self.finish())
     }
 }
@@ -78,7 +78,7 @@ impl<S> Responder<S> for &'static str {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self))
@@ -89,7 +89,7 @@ impl<S> Responder<S> for &'static [u8] {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self))
@@ -100,7 +100,7 @@ impl<S> Responder<S> for String {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self))
@@ -111,7 +111,7 @@ impl<'a, S> Responder<S> for &'a String {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self))
@@ -122,7 +122,7 @@ impl<S> Responder<S> for Bytes {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self))
@@ -133,7 +133,7 @@ impl<S> Responder<S> for BytesMut {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: Request<S>) -> Self::Future {
+    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self))
@@ -184,7 +184,7 @@ where
     type Error = Error;
     type Future = EitherResponder<A::Future, B::Future>;
 
-    fn respond_to(self, req: Request<S>) -> Self::Future {
+    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
         match self {
             Either::A(a) => EitherResponder::A(a.respond_to(req)),
             Either::B(b) => EitherResponder::B(b.respond_to(req)),
@@ -221,6 +221,24 @@ where
     }
 }
 
+impl<I, E, S> Responder<S> for Box<Future<Item = I, Error = E>>
+where
+    S: 'static,
+    I: Responder<S> + 'static,
+    E: Into<Error> + 'static,
+{
+    type Error = Error;
+    type Future = Box<Future<Item = Response, Error = Error>>;
+
+    #[inline]
+    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
+        Box::new(
+            self.map_err(|e| e.into())
+                .and_then(move |r| ResponseFuture(r.respond_to(req))),
+        )
+    }
+}
+
 pub struct ResponseFuture<T>(T);
 
 impl<T> ResponseFuture<T> {
@@ -239,23 +257,5 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         Ok(self.0.poll().map_err(|e| e.into())?)
-    }
-}
-
-impl<I, E, S> Responder<S> for Box<Future<Item = I, Error = E>>
-where
-    S: 'static,
-    I: Responder<S> + 'static,
-    E: Into<Error> + 'static,
-{
-    type Error = Error;
-    type Future = Box<Future<Item = Response, Error = Error>>;
-
-    #[inline]
-    fn respond_to(self, req: Request<S>) -> Self::Future {
-        Box::new(
-            self.map_err(|e| e.into())
-                .and_then(move |r| ResponseFuture(r.respond_to(req))),
-        )
     }
 }
