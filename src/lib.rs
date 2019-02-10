@@ -11,8 +11,8 @@ mod helpers;
 mod filter;
 pub mod middleware;
 mod request;
+mod resource;
 mod responder;
-mod route;
 mod service;
 mod state;
 
@@ -24,8 +24,8 @@ pub use crate::app::{App, AppService};
 pub use crate::extractor::{Form, Json, Path, Query};
 pub use crate::handler::FromRequest;
 pub use crate::request::HttpRequest;
+pub use crate::resource::Resource;
 pub use crate::responder::{Either, Responder};
-pub use crate::route::Resource;
 pub use crate::state::State;
 
 pub mod dev {

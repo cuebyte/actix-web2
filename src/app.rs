@@ -14,7 +14,7 @@ use futures::{try_ready, Async, Future, Poll};
 use crate::filter::Filter;
 use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpDefaultNewService};
 use crate::request::HttpRequest;
-use crate::route::{Resource, ResourceBuilder};
+use crate::resource::{Resource, ResourceBuilder};
 use crate::service::{ServiceRequest, ServiceResponse};
 use crate::state::{State, StateFactory};
 
