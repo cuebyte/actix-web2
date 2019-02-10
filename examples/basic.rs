@@ -31,15 +31,16 @@ fn main() {
                         middleware::DefaultHeaders::new().header("X-Version", "0.2"),
                     )
                     .service(
-                        Resource::build("/resource1/index.html")
-                            .method(Method::GET)
-                            .to(index),
+                        "/resource1/index.html",
+                        Resource::build().get(|r| r.to(index)),
                     )
                     .service(
-                        Resource::build("/resource2/index.html").to_async(index_async),
+                        "/resource2/index.html",
+                        Resource::build()
+                            .method(Method::GET, |r| r.to_async(index_async)),
                     )
-                    .service(Resource::build("/test1.html").to(|| "Test\r\n"))
-                    .service(Resource::build("/").to(no_params)),
+                    .service("/test1.html", Resource::build().to(|| "Test\r\n"))
+                    .service("/", Resource::build().to(no_params)),
             )
         })
         .unwrap()

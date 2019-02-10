@@ -153,50 +153,48 @@ where
     ///
     /// fn main() {
     ///     let app = App::new().resource("/users/{userid}/{friend}", |r| {
-    ///         r.get().f(|_| HttpResponse::Ok());
-    ///         r.head().f(|_| HttpResponse::MethodNotAllowed());
+    ///         r.get(|r| r.to(|_| HttpResponse::Ok()));
+    ///         r.head(|r| r.to(|_| HttpResponse::MethodNotAllowed()))
     ///     });
     /// }
     /// ```
-    pub fn resource<F, R>(mut self, path: &str, f: F) -> App<S, T>
+    pub fn resource<F, R, U>(mut self, path: &str, f: F) -> App<S, T>
     where
-        F: FnOnce(ResourceBuilder<S>) -> Resource<S> + 'static,
-    {
-        // let app = App::new().resource("/users/{userid}/{friend}", |r| {
-        //     r.middleware(test);
-        //     r.middleware(test2);
-        //     r.get().with(|| HttpResponse::Ok());
-        //     r.head().with(|| HttpResponse::MethodNotAllowed());
-        // });
-        // {
-        //     let parts = self.parts.as_mut().expect("Use after finish");
-
-        //     // create resource
-        //     let mut resource = Resource::new(ResourceDef::new(path));
-
-        //     // configure
-        //     f(&mut resource);
-
-        //     parts.router.register_resource(resource);
-        // }
-        self
-    }
-
-    /// Register resource handler service.
-    pub fn service<F>(mut self, factory: F) -> Self
-    where
-        F: HttpServiceFactory<ServiceRequest<S>> + 'static,
-        F::Factory: NewService<
+        F: FnOnce(ResourceBuilder<S>) -> R,
+        R: IntoNewService<U>,
+        U: NewService<
                 Request = ServiceRequest<S>,
                 Response = ServiceResponse,
                 Error = Error,
             > + 'static,
-        <F::Factory as NewService>::Future: 'static,
-        <<F::Factory as NewService>::Service as Service>::Future: 'static,
+        U::Future: 'static,
+        <U::Service as Service>::Future: 'static,
     {
-        let rdef = factory.rdef().clone();
-        self.services
-            .push((rdef, Box::new(HttpNewService::new(factory.create()))));
+        let rdef = ResourceDef::new(path);
+        self.services.push((
+            rdef,
+            Box::new(HttpNewService::new(f(Resource::build()).into_new_service())),
+        ));
+        self
+    }
+
+    /// Register resource handler service.
+    pub fn service<R, F, U>(mut self, rdef: R, factory: F) -> Self
+    where
+        R: Into<ResourceDef>,
+        F: IntoNewService<U>,
+        U: NewService<
+                Request = ServiceRequest<S>,
+                Response = ServiceResponse,
+                Error = Error,
+            > + 'static,
+        U::Future: 'static,
+        <U::Service as Service>::Future: 'static,
+    {
+        self.services.push((
+            rdef.into(),
+            Box::new(HttpNewService::new(factory.into_new_service())),
+        ));
         self
     }
 

@@ -13,6 +13,7 @@ pub mod middleware;
 mod request;
 mod resource;
 mod responder;
+mod route;
 mod service;
 mod state;
 
