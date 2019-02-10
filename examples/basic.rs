@@ -2,8 +2,7 @@ use futures::IntoFuture;
 
 use actix_http::{h1, http::Method};
 use actix_server::Server;
-use actix_service::NewService;
-use actix_web2::{middleware, App, Error, HttpRequest, Route};
+use actix_web2::{middleware, App, Error, HttpRequest, Resource};
 
 fn index(req: HttpRequest) -> &'static str {
     println!("REQ: {:?}", req);
@@ -32,15 +31,16 @@ fn main() {
                         middleware::DefaultHeaders::new().header("X-Version", "0.2"),
                     )
                     .service(
-                        Route::build("/resource1/index.html")
+                        Resource::build("/resource1/index.html")
                             .method(Method::GET)
-                            .finish(index),
+                            .to(index),
                     )
-                    .service(Route::build("/resource2/index.html").with(index_async))
-                    .service(Route::build("/test1.html").finish(|| "Test\r\n"))
-                    .service(Route::build("/").finish(no_params)),
+                    .service(
+                        Resource::build("/resource2/index.html").to_async(index_async),
+                    )
+                    .service(Resource::build("/test1.html").to(|| "Test\r\n"))
+                    .service(Resource::build("/").to(no_params)),
             )
-            .map(|_| ())
         })
         .unwrap()
         .workers(1)

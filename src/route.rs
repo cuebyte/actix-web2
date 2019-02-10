@@ -8,7 +8,7 @@ use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
 use crate::app::HttpServiceFactory;
-use crate::filter;
+use crate::filter::{self, Filter};
 use crate::handler::{
     AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, HandlerRequest,
 };
@@ -19,41 +19,41 @@ use crate::service::{ServiceRequest, ServiceResponse};
 ///
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
-pub struct Route<T, S = ()> {
+pub struct Resource<T, S = ()> {
     service: T,
     pattern: ResourceDef,
-    filters: Vec<Box<filter::Filter<S>>>,
+    filters: Vec<Box<Filter<S>>>,
 }
 
-impl<S: 'static> Route<(), S> {
-    pub fn build<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(rdef.into())
+impl<S: 'static> Resource<(), S> {
+    pub fn build<R: Into<ResourceDef>>(rdef: R) -> ResourceBuilder<S> {
+        ResourceBuilder::new(rdef.into())
     }
 
-    pub fn get<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(rdef.into()).method(Method::GET)
+    pub fn get<R: Into<ResourceDef>>(rdef: R) -> ResourceBuilder<S> {
+        ResourceBuilder::new(rdef.into()).method(Method::GET)
     }
 
-    pub fn post<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(rdef.into()).method(Method::POST)
+    pub fn post<R: Into<ResourceDef>>(rdef: R) -> ResourceBuilder<S> {
+        ResourceBuilder::new(rdef.into()).method(Method::POST)
     }
 
-    pub fn put<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(rdef.into()).method(Method::PUT)
+    pub fn put<R: Into<ResourceDef>>(rdef: R) -> ResourceBuilder<S> {
+        ResourceBuilder::new(rdef.into()).method(Method::PUT)
     }
 
-    pub fn delete<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(rdef.into()).method(Method::DELETE)
+    pub fn delete<R: Into<ResourceDef>>(rdef: R) -> ResourceBuilder<S> {
+        ResourceBuilder::new(rdef.into()).method(Method::DELETE)
     }
 }
 
-impl<T, S> Route<T, S>
+impl<T, S> Resource<T, S>
 where
     T: NewService<Request = ServiceRequest<S>, Response = Response> + 'static,
     T::Error: Into<Error>,
 {
     pub fn new<F: IntoNewService<T>>(rdef: ResourceDef, factory: F) -> Self {
-        Route {
+        Resource {
             pattern: rdef,
             service: factory.into_new_service(),
             filters: Vec::new(),
@@ -61,20 +61,20 @@ where
     }
 }
 
-impl<T, S> HttpServiceFactory<ServiceRequest<S>> for Route<T, S>
+impl<T, S> HttpServiceFactory<ServiceRequest<S>> for Resource<T, S>
 where
     T: NewService<Request = HandlerRequest<S>, Response = Response, Error = Error>
         + 'static,
     T::Service: 'static,
 {
-    type Factory = RouteFactory<T, S>;
+    type Factory = ResourceFactory<T, S>;
 
     fn rdef(&self) -> &ResourceDef {
         &self.pattern
     }
 
     fn create(self) -> Self::Factory {
-        RouteFactory {
+        ResourceFactory {
             service: self.service,
             pattern: self.pattern,
             filters: Rc::new(self.filters),
@@ -82,13 +82,13 @@ where
     }
 }
 
-pub struct RouteFactory<T, S> {
+pub struct ResourceFactory<T, S> {
     service: T,
     pattern: ResourceDef,
-    filters: Rc<Vec<Box<filter::Filter<S>>>>,
+    filters: Rc<Vec<Box<Filter<S>>>>,
 }
 
-impl<T, S> NewService for RouteFactory<T, S>
+impl<T, S> NewService for ResourceFactory<T, S>
 where
     T: NewService<Request = HandlerRequest<S>, Response = Response, Error = Error>
         + 'static,
@@ -98,7 +98,7 @@ where
     type Response = ServiceResponse;
     type Error = T::Error;
     type InitError = T::InitError;
-    type Service = RouteService<T::Service, S>;
+    type Service = ResourceService<T::Service, S>;
     type Future = CreateRouteService<T, S>;
 
     fn new_service(&self) -> Self::Future {
@@ -111,7 +111,7 @@ where
 
 pub struct CreateRouteService<T: NewService<Request = HandlerRequest<S>>, S> {
     fut: T::Future,
-    filters: Rc<Vec<Box<filter::Filter<S>>>>,
+    filters: Rc<Vec<Box<Filter<S>>>>,
 }
 
 impl<T, S> Future for CreateRouteService<T, S>
@@ -119,25 +119,25 @@ where
     T: NewService<Request = HandlerRequest<S>, Response = Response>,
     T::Error: Into<Error>,
 {
-    type Item = RouteService<T::Service, S>;
+    type Item = ResourceService<T::Service, S>;
     type Error = T::InitError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let service = try_ready!(self.fut.poll());
 
-        Ok(Async::Ready(RouteService {
+        Ok(Async::Ready(ResourceService {
             service,
             filters: self.filters.clone(),
         }))
     }
 }
 
-pub struct RouteService<T, S> {
+pub struct ResourceService<T, S> {
     service: T,
-    filters: Rc<Vec<Box<filter::Filter<S>>>>,
+    filters: Rc<Vec<Box<Filter<S>>>>,
 }
 
-impl<T, S> Service for RouteService<T, S>
+impl<T, S> Service for ResourceService<T, S>
 where
     T: Service<Request = HandlerRequest<S>, Response = Response> + 'static,
 {
@@ -145,7 +145,7 @@ where
     type Response = ServiceResponse;
     type Error = T::Error;
     type Future =
-        Either<RouteServiceResponse<T, S>, FutureResult<Self::Response, Self::Error>>;
+        Either<ResourceServiceResponse<T, S>, FutureResult<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.service.poll_ready()
@@ -158,19 +158,19 @@ where
             }
         }
 
-        Either::A(RouteServiceResponse {
+        Either::A(ResourceServiceResponse {
             fut: self.service.call(HandlerRequest::new(req.into_request())),
             _t: PhantomData,
         })
     }
 }
 
-pub struct RouteServiceResponse<T: Service, S> {
+pub struct ResourceServiceResponse<T: Service, S> {
     fut: T::Future,
     _t: PhantomData<S>,
 }
 
-impl<T, S> Future for RouteServiceResponse<T, S>
+impl<T, S> Future for ResourceServiceResponse<T, S>
 where
     T: Service<Request = HandlerRequest<S>, Response = Response>,
 {
@@ -183,14 +183,14 @@ where
     }
 }
 
-pub struct RoutePatternBuilder<S> {
+pub struct ResourceBuilder<S> {
     pattern: ResourceDef,
-    filters: Vec<Box<filter::Filter<S>>>,
+    filters: Vec<Box<Filter<S>>>,
 }
 
-impl<S: 'static> RoutePatternBuilder<S> {
-    fn new(rdef: ResourceDef) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder {
+impl<S: 'static> ResourceBuilder<S> {
+    fn new(rdef: ResourceDef) -> ResourceBuilder<S> {
+        ResourceBuilder {
             pattern: rdef,
             filters: Vec::new(),
         }
@@ -231,12 +231,15 @@ impl<S: 'static> RoutePatternBuilder<S> {
     /// #      .finish();
     /// # }
     /// ```
-    pub fn filter<F: filter::Filter<S> + 'static>(&mut self, f: F) -> &mut Self {
+    pub fn filter<F: Filter<S> + 'static>(&mut self, f: F) -> &mut Self {
         self.filters.push(Box::new(f));
         self
     }
 
-    pub fn and_then<T, U, F: IntoNewService<T>>(self, md: F) -> RouteBuilder<T, S, (), U>
+    pub fn map<T, U, F: IntoNewService<T>>(
+        self,
+        md: F,
+    ) -> ResourceServiceBuilder<T, S, (), U>
     where
         T: NewService<
             Request = HandlerRequest<S>,
@@ -244,7 +247,7 @@ impl<S: 'static> RoutePatternBuilder<S> {
             InitError = (),
         >,
     {
-        RouteBuilder {
+        ResourceServiceBuilder {
             service: md.into_new_service(),
             pattern: self.pattern,
             filters: self.filters,
@@ -252,10 +255,10 @@ impl<S: 'static> RoutePatternBuilder<S> {
         }
     }
 
-    pub fn finish<F, P, R>(
+    pub fn to<F, P, R>(
         self,
         handler: F,
-    ) -> Route<
+    ) -> Resource<
         impl NewService<
             Request = HandlerRequest<S>,
             Response = Response,
@@ -269,17 +272,17 @@ impl<S: 'static> RoutePatternBuilder<S> {
         P: FromRequest<S> + 'static,
         R: Responder<S> + 'static,
     {
-        Route {
+        Resource {
             service: Extract::new(P::Config::default()).and_then(Handle::new(handler)),
             pattern: self.pattern,
             filters: self.filters,
         }
     }
 
-    pub fn with<F, P, R>(
+    pub fn to_async<F, P, R>(
         self,
         handler: F,
-    ) -> Route<
+    ) -> Resource<
         impl NewService<
             Request = HandlerRequest<S>,
             Response = Response,
@@ -295,7 +298,7 @@ impl<S: 'static> RoutePatternBuilder<S> {
         R::Item: Into<Response>,
         R::Error: Into<Error>,
     {
-        Route {
+        Resource {
             service: Extract::new(P::Config::default()).then(AsyncHandle::new(handler)),
             pattern: self.pattern,
             filters: self.filters,
@@ -303,14 +306,14 @@ impl<S: 'static> RoutePatternBuilder<S> {
     }
 }
 
-pub struct RouteBuilder<T, S, U1, U2> {
+pub struct ResourceServiceBuilder<T, S, U1, U2> {
     service: T,
     pattern: ResourceDef,
-    filters: Vec<Box<filter::Filter<S>>>,
+    filters: Vec<Box<Filter<S>>>,
     _t: PhantomData<(U1, U2)>,
 }
 
-impl<T, S: 'static, U1, U2> RouteBuilder<T, S, U1, U2>
+impl<T, S: 'static, U1, U2> ResourceServiceBuilder<T, S, U1, U2>
 where
     T: NewService<
         Request = HandlerRequest<S, U1>,
@@ -320,7 +323,7 @@ where
     >,
 {
     pub fn new<F: IntoNewService<T>>(rdef: ResourceDef, factory: F) -> Self {
-        RouteBuilder {
+        ResourceServiceBuilder {
             service: factory.into_new_service(),
             pattern: rdef,
             filters: Vec::new(),
@@ -363,15 +366,15 @@ where
     /// #      .finish();
     /// # }
     /// ```
-    pub fn filter<F: filter::Filter<S> + 'static>(&mut self, f: F) -> &mut Self {
+    pub fn filter<F: Filter<S> + 'static>(&mut self, f: F) -> &mut Self {
         self.filters.push(Box::new(f));
         self
     }
 
-    pub fn and_then<T1, U3, F: IntoNewService<T1>>(
+    pub fn map<T1, U3, F: IntoNewService<T1>>(
         self,
         md: F,
-    ) -> RouteBuilder<
+    ) -> ResourceServiceBuilder<
         impl NewService<
             Request = HandlerRequest<S, U1>,
             Response = HandlerRequest<S, U3>,
@@ -390,7 +393,7 @@ where
         >,
         T1::Error: Into<Error>,
     {
-        RouteBuilder {
+        ResourceServiceBuilder {
             service: self
                 .service
                 .and_then(md.into_new_service().map_err(|e| e.into())),
@@ -400,10 +403,10 @@ where
         }
     }
 
-    pub fn with<F, P, R>(
+    pub fn to_async<F, P, R>(
         self,
         handler: F,
-    ) -> Route<
+    ) -> Resource<
         impl NewService<
             Request = HandlerRequest<S, U1>,
             Response = Response,
@@ -419,7 +422,7 @@ where
         R::Item: Into<Response>,
         R::Error: Into<Error>,
     {
-        Route {
+        Resource {
             service: self
                 .service
                 .and_then(Extract::new(P::Config::default()))
@@ -429,10 +432,10 @@ where
         }
     }
 
-    pub fn finish<F, P, R>(
+    pub fn to<F, P, R>(
         self,
         handler: F,
-    ) -> Route<
+    ) -> Resource<
         impl NewService<
             Request = HandlerRequest<S, U1>,
             Response = Response,
@@ -446,7 +449,7 @@ where
         P: FromRequest<S> + 'static,
         R: Responder<S> + 'static,
     {
-        Route {
+        Resource {
             service: self
                 .service
                 .and_then(Extract::new(P::Config::default()))

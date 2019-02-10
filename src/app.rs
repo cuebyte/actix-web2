@@ -14,6 +14,7 @@ use futures::{try_ready, Async, Future, Poll};
 use crate::filter::Filter;
 use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpDefaultNewService};
 use crate::request::HttpRequest;
+use crate::route::{Resource, ResourceBuilder};
 use crate::service::{ServiceRequest, ServiceResponse};
 use crate::state::{State, StateFactory};
 
@@ -126,6 +127,61 @@ where
         self
     }
 
+    /// Configure resource for a specific path.
+    ///
+    /// Resources may have variable path segments. For example, a
+    /// resource with the path `/a/{name}/c` would match all incoming
+    /// requests with paths such as `/a/b/c`, `/a/1/c`, or `/a/etc/c`.
+    ///
+    /// A variable segment is specified in the form `{identifier}`,
+    /// where the identifier can be used later in a request handler to
+    /// access the matched value for that segment. This is done by
+    /// looking up the identifier in the `Params` object returned by
+    /// `HttpRequest.match_info()` method.
+    ///
+    /// By default, each segment matches the regular expression `[^{}/]+`.
+    ///
+    /// You can also specify a custom regex in the form `{identifier:regex}`:
+    ///
+    /// For instance, to route `GET`-requests on any route matching
+    /// `/users/{userid}/{friend}` and store `userid` and `friend` in
+    /// the exposed `Params` object:
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// use actix_web::{http, App, HttpResponse};
+    ///
+    /// fn main() {
+    ///     let app = App::new().resource("/users/{userid}/{friend}", |r| {
+    ///         r.get().f(|_| HttpResponse::Ok());
+    ///         r.head().f(|_| HttpResponse::MethodNotAllowed());
+    ///     });
+    /// }
+    /// ```
+    pub fn resource<F, R>(mut self, path: &str, f: F) -> App<S, T>
+    where
+        F: FnOnce(ResourceBuilder<S>) -> Resource<S> + 'static,
+    {
+        // let app = App::new().resource("/users/{userid}/{friend}", |r| {
+        //     r.middleware(test);
+        //     r.middleware(test2);
+        //     r.get().with(|| HttpResponse::Ok());
+        //     r.head().with(|| HttpResponse::MethodNotAllowed());
+        // });
+        // {
+        //     let parts = self.parts.as_mut().expect("Use after finish");
+
+        //     // create resource
+        //     let mut resource = Resource::new(ResourceDef::new(path));
+
+        //     // configure
+        //     f(&mut resource);
+
+        //     parts.router.register_resource(resource);
+        // }
+        self
+    }
+
     /// Register resource handler service.
     pub fn service<F>(mut self, factory: F) -> Self
     where
@@ -165,7 +221,6 @@ where
             Error = (),
             InitError = (),
         >,
-        // M::Error: Into<Error>,
         F: IntoNewTransform<M, T::Service>,
     {
         let endpoint = ApplyNewService::new(mw, self.endpoint);

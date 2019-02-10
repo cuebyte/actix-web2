@@ -25,7 +25,7 @@ pub use crate::extractor::{Form, Json, Path, Query};
 pub use crate::handler::FromRequest;
 pub use crate::request::HttpRequest;
 pub use crate::responder::{Either, Responder};
-pub use crate::route::Route;
+pub use crate::route::Resource;
 pub use crate::state::State;
 
 pub mod dev {
