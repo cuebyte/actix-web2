@@ -431,7 +431,7 @@ macro_rules! factory_tuple_unit ({$(($n:tt, $T:ident)),+} => {
     }
 });
 
-#[cfg_attr(rustfmt, rustfmt_skip)]
+#[rustfmt::skip]
 mod m {
     use super::*;
 

@@ -1,11 +1,14 @@
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use actix_http::{http::Method, Error, Response};
 use actix_router::ResourceDef;
 use actix_service::{IntoNewService, NewService, Service};
+use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
 use crate::app::HttpServiceFactory;
+use crate::filter;
 use crate::handler::{
     AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, HandlerRequest,
 };
@@ -19,11 +22,10 @@ use crate::service::{ServiceRequest, ServiceResponse};
 pub struct Route<T, S = ()> {
     service: T,
     pattern: ResourceDef,
-    methods: Vec<Method>,
-    state: PhantomData<S>,
+    filters: Vec<Box<filter::Filter<S>>>,
 }
 
-impl<S> Route<(), S> {
+impl<S: 'static> Route<(), S> {
     pub fn build<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
         RoutePatternBuilder::new(rdef.into())
     }
@@ -54,14 +56,8 @@ where
         Route {
             pattern: rdef,
             service: factory.into_new_service(),
-            methods: Vec::new(),
-            state: PhantomData,
+            filters: Vec::new(),
         }
-    }
-
-    pub fn method(mut self, method: Method) -> Self {
-        self.methods.push(method);
-        self
     }
 }
 
@@ -81,8 +77,7 @@ where
         RouteFactory {
             service: self.service,
             pattern: self.pattern,
-            methods: self.methods,
-            state: PhantomData,
+            filters: Rc::new(self.filters),
         }
     }
 }
@@ -90,8 +85,7 @@ where
 pub struct RouteFactory<T, S> {
     service: T,
     pattern: ResourceDef,
-    methods: Vec<Method>,
-    state: PhantomData<S>,
+    filters: Rc<Vec<Box<filter::Filter<S>>>>,
 }
 
 impl<T, S> NewService for RouteFactory<T, S>
@@ -110,16 +104,14 @@ where
     fn new_service(&self) -> Self::Future {
         CreateRouteService {
             fut: self.service.new_service(),
-            methods: self.methods.clone(),
-            state: PhantomData,
+            filters: self.filters.clone(),
         }
     }
 }
 
 pub struct CreateRouteService<T: NewService<Request = HandlerRequest<S>>, S> {
     fut: T::Future,
-    methods: Vec<Method>,
-    state: PhantomData<S>,
+    filters: Rc<Vec<Box<filter::Filter<S>>>>,
 }
 
 impl<T, S> Future for CreateRouteService<T, S>
@@ -135,16 +127,14 @@ where
 
         Ok(Async::Ready(RouteService {
             service,
-            methods: self.methods.clone(),
-            state: PhantomData,
+            filters: self.filters.clone(),
         }))
     }
 }
 
 pub struct RouteService<T, S> {
     service: T,
-    methods: Vec<Method>,
-    state: PhantomData<S>,
+    filters: Rc<Vec<Box<filter::Filter<S>>>>,
 }
 
 impl<T, S> Service for RouteService<T, S>
@@ -154,17 +144,24 @@ where
     type Request = ServiceRequest<S>;
     type Response = ServiceResponse;
     type Error = T::Error;
-    type Future = RouteServiceResponse<T, S>;
+    type Future =
+        Either<RouteServiceResponse<T, S>, FutureResult<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.service.poll_ready()
     }
 
-    fn call(&mut self, req: ServiceRequest<S>) -> Self::Future {
-        RouteServiceResponse {
+    fn call(&mut self, mut req: ServiceRequest<S>) -> Self::Future {
+        for f in self.filters.iter() {
+            if !f.check(&mut req) {
+                return Either::B(ok(req.into()));
+            }
+        }
+
+        Either::A(RouteServiceResponse {
             fut: self.service.call(HandlerRequest::new(req.into_request())),
             _t: PhantomData,
-        }
+        })
     }
 }
 
@@ -188,21 +185,54 @@ where
 
 pub struct RoutePatternBuilder<S> {
     pattern: ResourceDef,
-    methods: Vec<Method>,
-    state: PhantomData<S>,
+    filters: Vec<Box<filter::Filter<S>>>,
 }
 
-impl<S> RoutePatternBuilder<S> {
+impl<S: 'static> RoutePatternBuilder<S> {
     fn new(rdef: ResourceDef) -> RoutePatternBuilder<S> {
         RoutePatternBuilder {
             pattern: rdef,
-            methods: Vec::new(),
-            state: PhantomData,
+            filters: Vec::new(),
         }
     }
 
+    /// Add method match filter to the route.
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// # use actix_web::*;
+    /// # fn main() {
+    /// App::new().resource("/path", |r| {
+    ///     r.route()
+    ///         .filter(pred::Get())
+    ///         .filter(pred::Header("content-type", "text/plain"))
+    ///         .f(|req| HttpResponse::Ok())
+    /// })
+    /// #      .finish();
+    /// # }
+    /// ```
     pub fn method(mut self, method: Method) -> Self {
-        self.methods.push(method);
+        self.filters.push(Box::new(filter::Method(method)));
+        self
+    }
+
+    /// Add filter to the route.
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// # use actix_web::*;
+    /// # fn main() {
+    /// App::new().resource("/path", |r| {
+    ///     r.route()
+    ///         .filter(pred::Get())
+    ///         .filter(pred::Header("content-type", "text/plain"))
+    ///         .f(|req| HttpResponse::Ok())
+    /// })
+    /// #      .finish();
+    /// # }
+    /// ```
+    pub fn filter<F: filter::Filter<S> + 'static>(&mut self, f: F) -> &mut Self {
+        self.filters.push(Box::new(f));
         self
     }
 
@@ -217,7 +247,7 @@ impl<S> RoutePatternBuilder<S> {
         RouteBuilder {
             service: md.into_new_service(),
             pattern: self.pattern,
-            methods: self.methods,
+            filters: self.filters,
             _t: PhantomData,
         }
     }
@@ -242,8 +272,7 @@ impl<S> RoutePatternBuilder<S> {
         Route {
             service: Extract::new(P::Config::default()).and_then(Handle::new(handler)),
             pattern: self.pattern,
-            methods: self.methods,
-            state: PhantomData,
+            filters: self.filters,
         }
     }
 
@@ -269,8 +298,7 @@ impl<S> RoutePatternBuilder<S> {
         Route {
             service: Extract::new(P::Config::default()).then(AsyncHandle::new(handler)),
             pattern: self.pattern,
-            methods: self.methods,
-            state: PhantomData,
+            filters: self.filters,
         }
     }
 }
@@ -278,11 +306,11 @@ impl<S> RoutePatternBuilder<S> {
 pub struct RouteBuilder<T, S, U1, U2> {
     service: T,
     pattern: ResourceDef,
-    methods: Vec<Method>,
-    _t: PhantomData<(S, U1, U2)>,
+    filters: Vec<Box<filter::Filter<S>>>,
+    _t: PhantomData<(U1, U2)>,
 }
 
-impl<T, S, U1, U2> RouteBuilder<T, S, U1, U2>
+impl<T, S: 'static, U1, U2> RouteBuilder<T, S, U1, U2>
 where
     T: NewService<
         Request = HandlerRequest<S, U1>,
@@ -295,13 +323,48 @@ where
         RouteBuilder {
             service: factory.into_new_service(),
             pattern: rdef,
-            methods: Vec::new(),
+            filters: Vec::new(),
             _t: PhantomData,
         }
     }
 
+    /// Add method match filter to the route.
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// # use actix_web::*;
+    /// # fn main() {
+    /// App::new().resource("/path", |r| {
+    ///     r.route()
+    ///         .filter(pred::Get())
+    ///         .filter(pred::Header("content-type", "text/plain"))
+    ///         .f(|req| HttpResponse::Ok())
+    /// })
+    /// #      .finish();
+    /// # }
+    /// ```
     pub fn method(mut self, method: Method) -> Self {
-        self.methods.push(method);
+        self.filters.push(Box::new(filter::Method(method)));
+        self
+    }
+
+    /// Add filter to the route.
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// # use actix_web::*;
+    /// # fn main() {
+    /// App::new().resource("/path", |r| {
+    ///     r.route()
+    ///         .filter(pred::Get())
+    ///         .filter(pred::Header("content-type", "text/plain"))
+    ///         .f(|req| HttpResponse::Ok())
+    /// })
+    /// #      .finish();
+    /// # }
+    /// ```
+    pub fn filter<F: filter::Filter<S> + 'static>(&mut self, f: F) -> &mut Self {
+        self.filters.push(Box::new(f));
         self
     }
 
@@ -332,7 +395,7 @@ where
                 .service
                 .and_then(md.into_new_service().map_err(|e| e.into())),
             pattern: self.pattern,
-            methods: self.methods,
+            filters: self.filters,
             _t: PhantomData,
         }
     }
@@ -362,8 +425,7 @@ where
                 .and_then(Extract::new(P::Config::default()))
                 .then(AsyncHandle::new(handler)),
             pattern: self.pattern,
-            methods: self.methods,
-            state: PhantomData,
+            filters: self.filters,
         }
     }
 
@@ -390,8 +452,7 @@ where
                 .and_then(Extract::new(P::Config::default()))
                 .and_then(Handle::new(handler)),
             pattern: self.pattern,
-            methods: self.methods,
-            state: PhantomData,
+            filters: self.filters,
         }
     }
 }

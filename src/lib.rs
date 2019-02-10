@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(clippy::type_complexity, dead_code)]
 
 #[macro_use]
 extern crate derive_more;
@@ -8,8 +8,8 @@ mod extractor;
 pub mod handler;
 mod helpers;
 // mod info;
+mod filter;
 pub mod middleware;
-mod pred;
 mod request;
 mod responder;
 mod route;

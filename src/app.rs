@@ -11,8 +11,8 @@ use actix_utils::cloneable::CloneableService;
 use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, Poll};
 
+use crate::filter::Filter;
 use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpDefaultNewService};
-use crate::pred::Predicate;
 use crate::request::HttpRequest;
 use crate::service::{ServiceRequest, ServiceResponse};
 use crate::state::{State, StateFactory};
@@ -35,7 +35,7 @@ pub struct App<S, T> {
     )>,
     default: Option<HttpDefaultNewService<HttpRequest<S>, Response>>,
     state: AppState<S>,
-    filters: Vec<Box<Predicate<S>>>,
+    filters: Vec<Box<Filter<S>>>,
     endpoint: T,
     factory_ref: Rc<RefCell<Option<AppFactory<S>>>>,
 }
@@ -121,7 +121,7 @@ where
     /// #      .finish();
     /// # }
     /// ```
-    pub fn filter<P: Predicate<S> + 'static>(mut self, p: P) -> Self {
+    pub fn filter<P: Filter<S> + 'static>(mut self, p: P) -> Self {
         self.filters.push(Box::new(p));
         self
     }
@@ -257,7 +257,7 @@ pub struct AppFactory<S> {
             BoxedHttpNewService<ServiceRequest<S>, ServiceResponse>,
         )>,
     >,
-    filters: Rc<Vec<Box<Predicate<S>>>>,
+    filters: Rc<Vec<Box<Filter<S>>>>,
 }
 
 impl<S: 'static> NewService for AppFactory<S> {
@@ -304,7 +304,7 @@ pub struct CreateAppService<S> {
     fut: Vec<CreateAppServiceItem<S>>,
     state: Option<State<S>>,
     state_fut: Option<Box<Future<Item = S, Error = ()>>>,
-    filters: Option<Rc<Vec<Box<Predicate<S>>>>>,
+    filters: Option<Rc<Vec<Box<Filter<S>>>>>,
 }
 
 enum CreateAppServiceItem<S> {
@@ -379,7 +379,7 @@ pub struct AppService<S> {
     state: State<S>,
     router: Router<BoxedHttpService<ServiceRequest<S>, ServiceResponse>>,
     ready: Option<(ServiceRequest<S>, ResourceInfo)>,
-    filters: Option<Rc<Vec<Box<Predicate<S>>>>>,
+    filters: Option<Rc<Vec<Box<Filter<S>>>>>,
 }
 
 impl<S> Service for AppService<S> {

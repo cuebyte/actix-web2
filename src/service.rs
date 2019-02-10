@@ -73,3 +73,9 @@ impl Into<Response> for ServiceResponse {
         }
     }
 }
+
+impl<S> From<ServiceRequest<S>> for ServiceResponse {
+    fn from(req: ServiceRequest<S>) -> Self {
+        ServiceResponse::Unhandled(req.request)
+    }
+}

@@ -41,9 +41,7 @@ where
     fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
         match self {
             Some(t) => EitherFuture::A(t.respond_to(req)),
-            None => EitherFuture::B(ok(Response::build(StatusCode::NOT_FOUND)
-                .finish()
-                .into())),
+            None => EitherFuture::B(ok(Response::build(StatusCode::NOT_FOUND).finish())),
         }
     }
 }

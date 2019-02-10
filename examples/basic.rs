@@ -1,6 +1,6 @@
 use futures::IntoFuture;
 
-use actix_http::h1;
+use actix_http::{h1, http::Method};
 use actix_server::Server;
 use actix_service::NewService;
 use actix_web2::{middleware, App, Error, HttpRequest, Route};
@@ -31,7 +31,11 @@ fn main() {
                     .middleware(
                         middleware::DefaultHeaders::new().header("X-Version", "0.2"),
                     )
-                    .service(Route::build("/resource1/index.html").finish(index))
+                    .service(
+                        Route::build("/resource1/index.html")
+                            .method(Method::GET)
+                            .finish(index),
+                    )
                     .service(Route::build("/resource2/index.html").with(index_async))
                     .service(Route::build("/test1.html").finish(|| "Test\r\n"))
                     .service(Route::build("/").finish(no_params)),

@@ -57,12 +57,12 @@ impl DefaultHeaders {
 
     /// Set a header.
     #[inline]
-    #[cfg_attr(feature = "cargo-clippy", allow(match_wild_err_arm))]
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: HttpTryFrom<K>,
         HeaderValue: HttpTryFrom<V>,
     {
+        #[allow(clippy::match_wild_err_arm)]
         match HeaderName::try_from(key) {
             Ok(key) => match HeaderValue::try_from(value) {
                 Ok(value) => {
@@ -115,23 +115,20 @@ where
         let inner = self.inner.clone();
 
         Box::new(srv.call(req).map(move |mut res| {
-            match res {
-                ServiceResponse::Response(ref mut res) => {
-                    // set response headers
-                    for (key, value) in inner.headers.iter() {
-                        if !res.headers().contains_key(key) {
-                            res.headers_mut().insert(key, value.clone());
-                        }
-                    }
-                    // default content-type
-                    if inner.ct && !res.headers().contains_key(CONTENT_TYPE) {
-                        res.headers_mut().insert(
-                            CONTENT_TYPE,
-                            HeaderValue::from_static("application/octet-stream"),
-                        );
+            if let ServiceResponse::Response(ref mut res) = res {
+                // set response headers
+                for (key, value) in inner.headers.iter() {
+                    if !res.headers().contains_key(key) {
+                        res.headers_mut().insert(key, value.clone());
                     }
                 }
-                _ => (),
+                // default content-type
+                if inner.ct && !res.headers().contains_key(CONTENT_TYPE) {
+                    res.headers_mut().insert(
+                        CONTENT_TYPE,
+                        HeaderValue::from_static("application/octet-stream"),
+                    );
+                }
             }
             res
         }))

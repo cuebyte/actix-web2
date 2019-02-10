@@ -10,16 +10,16 @@ use crate::service::ServiceRequest;
 /// Predicate can modify request object. It is also possible to
 /// to store extra attributes on request by using `Extensions` container,
 /// Extensions container available via `HttpRequest::extensions()` method.
-pub trait Predicate<S> {
+pub trait Filter<S> {
     /// Check if request matches predicate
     fn check(&self, request: &mut ServiceRequest<S>) -> bool;
 }
 
-/// Return predicate that matches if any of supplied predicate matches.
+/// Return filter that matches if any of supplied filters.
 ///
 /// ```rust
 /// # extern crate actix_web;
-/// use actix_web2::{pred, App, HttpResponse};
+/// use actix_web2::{filter, App, HttpResponse};
 ///
 /// fn main() {
 ///     App::new().resource("/index.html", |r| {
@@ -29,22 +29,22 @@ pub trait Predicate<S> {
 ///     });
 /// }
 /// ```
-pub fn Any<S: 'static, P: Predicate<S> + 'static>(pred: P) -> AnyPredicate<S> {
-    AnyPredicate(vec![Box::new(pred)])
+pub fn Any<S, F: Filter<S> + 'static>(filter: F) -> AnyFilter<S> {
+    AnyFilter(vec![Box::new(filter)])
 }
 
-/// Matches if any of supplied predicate matches.
-pub struct AnyPredicate<S>(Vec<Box<Predicate<S>>>);
+/// Matches if any of supplied filters matche.
+pub struct AnyFilter<S>(Vec<Box<Filter<S>>>);
 
-impl<S> AnyPredicate<S> {
-    /// Add new predicate to list of predicates to check
-    pub fn or<P: Predicate<S> + 'static>(mut self, pred: P) -> Self {
-        self.0.push(Box::new(pred));
+impl<S> AnyFilter<S> {
+    /// Add filter to a list of filters to check
+    pub fn or<F: Filter<S> + 'static>(mut self, filter: F) -> Self {
+        self.0.push(Box::new(filter));
         self
     }
 }
 
-impl<S: 'static> Predicate<S> for AnyPredicate<S> {
+impl<S> Filter<S> for AnyFilter<S> {
     fn check(&self, req: &mut ServiceRequest<S>) -> bool {
         for p in &self.0 {
             if p.check(req) {
@@ -55,7 +55,7 @@ impl<S: 'static> Predicate<S> for AnyPredicate<S> {
     }
 }
 
-/// Return predicate that matches if all of supplied predicate matches.
+/// Return filter that matches if all of supplied filters match.
 ///
 /// ```rust
 /// # extern crate actix_web;
@@ -72,22 +72,22 @@ impl<S: 'static> Predicate<S> for AnyPredicate<S> {
 ///     });
 /// }
 /// ```
-pub fn All<S: 'static, P: Predicate<S> + 'static>(pred: P) -> AllPredicate<S> {
-    AllPredicate(vec![Box::new(pred)])
+pub fn All<S, F: Filter<S> + 'static>(filter: F) -> AllFilter<S> {
+    AllFilter(vec![Box::new(filter)])
 }
 
-/// Matches if all of supplied predicate matches.
-pub struct AllPredicate<S>(Vec<Box<Predicate<S>>>);
+/// Matches if all of supplied filters matche.
+pub struct AllFilter<S>(Vec<Box<Filter<S>>>);
 
-impl<S> AllPredicate<S> {
+impl<S> AllFilter<S> {
     /// Add new predicate to list of predicates to check
-    pub fn and<P: Predicate<S> + 'static>(mut self, pred: P) -> Self {
-        self.0.push(Box::new(pred));
+    pub fn and<F: Filter<S> + 'static>(mut self, filter: F) -> Self {
+        self.0.push(Box::new(filter));
         self
     }
 }
 
-impl<S: 'static> Predicate<S> for AllPredicate<S> {
+impl<S> Filter<S> for AllFilter<S> {
     fn check(&self, request: &mut ServiceRequest<S>) -> bool {
         for p in &self.0 {
             if !p.check(request) {
@@ -99,14 +99,14 @@ impl<S: 'static> Predicate<S> for AllPredicate<S> {
 }
 
 /// Return predicate that matches if supplied predicate does not match.
-pub fn Not<S: 'static, P: Predicate<S> + 'static>(pred: P) -> NotPredicate<S> {
-    NotPredicate(Box::new(pred))
+pub fn Not<S, F: Filter<S> + 'static>(filter: F) -> NotFilter<S> {
+    NotFilter(Box::new(filter))
 }
 
 #[doc(hidden)]
-pub struct NotPredicate<S>(Box<Predicate<S>>);
+pub struct NotFilter<S>(Box<Filter<S>>);
 
-impl<S: 'static> Predicate<S> for NotPredicate<S> {
+impl<S> Filter<S> for NotFilter<S> {
     fn check(&self, request: &mut ServiceRequest<S>) -> bool {
         !self.0.check(request)
     }
@@ -114,71 +114,68 @@ impl<S: 'static> Predicate<S> for NotPredicate<S> {
 
 /// Http method predicate
 #[doc(hidden)]
-pub struct MethodPredicate<S>(http::Method, PhantomData<S>);
+pub struct MethodFilter<S>(http::Method, PhantomData<S>);
 
-impl<S: 'static> Predicate<S> for MethodPredicate<S> {
+impl<S> Filter<S> for MethodFilter<S> {
     fn check(&self, request: &mut ServiceRequest<S>) -> bool {
         request.method() == self.0
     }
 }
 
 /// Predicate to match *GET* http method
-pub fn Get<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::GET, PhantomData)
+pub fn Get<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::GET, PhantomData)
 }
 
 /// Predicate to match *POST* http method
-pub fn Post<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::POST, PhantomData)
+pub fn Post<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::POST, PhantomData)
 }
 
 /// Predicate to match *PUT* http method
-pub fn Put<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::PUT, PhantomData)
+pub fn Put<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::PUT, PhantomData)
 }
 
 /// Predicate to match *DELETE* http method
-pub fn Delete<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::DELETE, PhantomData)
+pub fn Delete<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::DELETE, PhantomData)
 }
 
 /// Predicate to match *HEAD* http method
-pub fn Head<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::HEAD, PhantomData)
+pub fn Head<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::HEAD, PhantomData)
 }
 
 /// Predicate to match *OPTIONS* http method
-pub fn Options<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::OPTIONS, PhantomData)
+pub fn Options<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::OPTIONS, PhantomData)
 }
 
 /// Predicate to match *CONNECT* http method
-pub fn Connect<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::CONNECT, PhantomData)
+pub fn Connect<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::CONNECT, PhantomData)
 }
 
 /// Predicate to match *PATCH* http method
-pub fn Patch<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::PATCH, PhantomData)
+pub fn Patch<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::PATCH, PhantomData)
 }
 
 /// Predicate to match *TRACE* http method
-pub fn Trace<S: 'static>() -> MethodPredicate<S> {
-    MethodPredicate(http::Method::TRACE, PhantomData)
+pub fn Trace<S>() -> MethodFilter<S> {
+    MethodFilter(http::Method::TRACE, PhantomData)
 }
 
 /// Predicate to match specified http method
-pub fn Method<S: 'static>(method: http::Method) -> MethodPredicate<S> {
-    MethodPredicate(method, PhantomData)
+pub fn Method<S>(method: http::Method) -> MethodFilter<S> {
+    MethodFilter(method, PhantomData)
 }
 
 /// Return predicate that matches if request contains specified header and
 /// value.
-pub fn Header<S: 'static>(
-    name: &'static str,
-    value: &'static str,
-) -> HeaderPredicate<S> {
-    HeaderPredicate(
+pub fn Header<S>(name: &'static str, value: &'static str) -> HeaderFilter<S> {
+    HeaderFilter(
         header::HeaderName::try_from(name).unwrap(),
         header::HeaderValue::from_static(value),
         PhantomData,
@@ -186,9 +183,9 @@ pub fn Header<S: 'static>(
 }
 
 #[doc(hidden)]
-pub struct HeaderPredicate<S>(header::HeaderName, header::HeaderValue, PhantomData<S>);
+pub struct HeaderFilter<S>(header::HeaderName, header::HeaderValue, PhantomData<S>);
 
-impl<S: 'static> Predicate<S> for HeaderPredicate<S> {
+impl<S> Filter<S> for HeaderFilter<S> {
     fn check(&self, req: &mut ServiceRequest<S>) -> bool {
         if let Some(val) = req.headers().get(&self.0) {
             return val == self.1;
@@ -211,21 +208,21 @@ impl<S: 'static> Predicate<S> for HeaderPredicate<S> {
 ///     });
 /// }
 /// ```
-pub fn Host<S: 'static, H: AsRef<str>>(host: H) -> HostPredicate<S> {
-    HostPredicate(host.as_ref().to_string(), None, PhantomData)
+pub fn Host<S: 'static, H: AsRef<str>>(host: H) -> HostFilter<S> {
+    HostFilter(host.as_ref().to_string(), None, PhantomData)
 }
 
 #[doc(hidden)]
-pub struct HostPredicate<S>(String, Option<String>, PhantomData<S>);
+pub struct HostFilter<S>(String, Option<String>, PhantomData<S>);
 
-impl<S> HostPredicate<S> {
+impl<S> HostFilter<S> {
     /// Set reuest scheme to match
     pub fn scheme<H: AsRef<str>>(&mut self, scheme: H) {
         self.1 = Some(scheme.as_ref().to_string())
     }
 }
 
-impl<S: 'static> Predicate<S> for HostPredicate<S> {
+impl<S: 'static> Filter<S> for HostFilter<S> {
     fn check(&self, _req: &mut ServiceRequest<S>) -> bool {
         // let info = req.connection_info();
         // if let Some(ref scheme) = self.1 {
