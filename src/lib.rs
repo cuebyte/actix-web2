@@ -7,6 +7,9 @@ mod app;
 mod extractor;
 pub mod handler;
 mod helpers;
+// mod info;
+pub mod middleware;
+mod pred;
 mod request;
 mod responder;
 mod route;
@@ -27,4 +30,5 @@ pub use crate::state::State;
 
 pub mod dev {
     pub use crate::handler::{AsyncFactory, Extract, Factory, Handle};
+    // pub use crate::info::ConnectionInfo;
 }

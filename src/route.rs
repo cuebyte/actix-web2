@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use actix_http::{http::Method, Error, Response};
+use actix_router::ResourceDef;
 use actix_service::{IntoNewService, NewService, Service};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
@@ -17,30 +18,30 @@ use crate::service::{ServiceRequest, ServiceResponse};
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
 pub struct Route<T, S = ()> {
     service: T,
-    pattern: String,
+    pattern: ResourceDef,
     methods: Vec<Method>,
     state: PhantomData<S>,
 }
 
 impl<S> Route<(), S> {
-    pub fn build(path: &str) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(path)
+    pub fn build<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(rdef.into())
     }
 
-    pub fn get(path: &str) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(path).method(Method::GET)
+    pub fn get<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(rdef.into()).method(Method::GET)
     }
 
-    pub fn post(path: &str) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(path).method(Method::POST)
+    pub fn post<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(rdef.into()).method(Method::POST)
     }
 
-    pub fn put(path: &str) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(path).method(Method::PUT)
+    pub fn put<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(rdef.into()).method(Method::PUT)
     }
 
-    pub fn delete(path: &str) -> RoutePatternBuilder<S> {
-        RoutePatternBuilder::new(path).method(Method::DELETE)
+    pub fn delete<R: Into<ResourceDef>>(rdef: R) -> RoutePatternBuilder<S> {
+        RoutePatternBuilder::new(rdef.into()).method(Method::DELETE)
     }
 }
 
@@ -49,9 +50,9 @@ where
     T: NewService<Request = ServiceRequest<S>, Response = Response> + 'static,
     T::Error: Into<Error>,
 {
-    pub fn new<F: IntoNewService<T>>(pattern: &str, factory: F) -> Self {
+    pub fn new<F: IntoNewService<T>>(rdef: ResourceDef, factory: F) -> Self {
         Route {
-            pattern: pattern.to_owned(),
+            pattern: rdef,
             service: factory.into_new_service(),
             methods: Vec::new(),
             state: PhantomData,
@@ -72,7 +73,7 @@ where
 {
     type Factory = RouteFactory<T, S>;
 
-    fn path(&self) -> &str {
+    fn rdef(&self) -> &ResourceDef {
         &self.pattern
     }
 
@@ -88,7 +89,7 @@ where
 
 pub struct RouteFactory<T, S> {
     service: T,
-    pattern: String,
+    pattern: ResourceDef,
     methods: Vec<Method>,
     state: PhantomData<S>,
 }
@@ -109,7 +110,6 @@ where
     fn new_service(&self) -> Self::Future {
         CreateRouteService {
             fut: self.service.new_service(),
-            pattern: self.pattern.clone(),
             methods: self.methods.clone(),
             state: PhantomData,
         }
@@ -118,7 +118,6 @@ where
 
 pub struct CreateRouteService<T: NewService<Request = HandlerRequest<S>>, S> {
     fut: T::Future,
-    pattern: String,
     methods: Vec<Method>,
     state: PhantomData<S>,
 }
@@ -136,7 +135,6 @@ where
 
         Ok(Async::Ready(RouteService {
             service,
-            pattern: self.pattern.clone(),
             methods: self.methods.clone(),
             state: PhantomData,
         }))
@@ -145,7 +143,6 @@ where
 
 pub struct RouteService<T, S> {
     service: T,
-    pattern: String,
     methods: Vec<Method>,
     state: PhantomData<S>,
 }
@@ -190,15 +187,15 @@ where
 }
 
 pub struct RoutePatternBuilder<S> {
-    pattern: String,
+    pattern: ResourceDef,
     methods: Vec<Method>,
     state: PhantomData<S>,
 }
 
 impl<S> RoutePatternBuilder<S> {
-    fn new(path: &str) -> RoutePatternBuilder<S> {
+    fn new(rdef: ResourceDef) -> RoutePatternBuilder<S> {
         RoutePatternBuilder {
-            pattern: path.to_string(),
+            pattern: rdef,
             methods: Vec::new(),
             state: PhantomData,
         }
@@ -280,7 +277,7 @@ impl<S> RoutePatternBuilder<S> {
 
 pub struct RouteBuilder<T, S, U1, U2> {
     service: T,
-    pattern: String,
+    pattern: ResourceDef,
     methods: Vec<Method>,
     _t: PhantomData<(S, U1, U2)>,
 }
@@ -294,10 +291,10 @@ where
         InitError = (),
     >,
 {
-    pub fn new<F: IntoNewService<T>>(path: &str, factory: F) -> Self {
+    pub fn new<F: IntoNewService<T>>(rdef: ResourceDef, factory: F) -> Self {
         RouteBuilder {
             service: factory.into_new_service(),
-            pattern: path.to_string(),
+            pattern: rdef,
             methods: Vec::new(),
             _t: PhantomData,
         }

@@ -118,6 +118,12 @@ impl<S> HttpRequest<S> {
     pub fn extensions_mut(&self) -> RefMut<Extensions> {
         self.head.extensions_mut()
     }
+
+    // /// Get *ConnectionInfo* for the correct request.
+    // #[inline]
+    // pub fn connection_info(&self) -> Ref<ConnectionInfo> {
+    //    ConnectionInfo::get(&*self)
+    // }
 }
 
 impl<S> Clone for HttpRequest<S> {

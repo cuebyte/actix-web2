@@ -3,7 +3,7 @@ use futures::IntoFuture;
 use actix_http::h1;
 use actix_server::Server;
 use actix_service::NewService;
-use actix_web2::{App, Error, HttpRequest, Route};
+use actix_web2::{middleware, App, Error, HttpRequest, Route};
 
 fn index(req: HttpRequest) -> &'static str {
     println!("REQ: {:?}", req);
@@ -28,6 +28,9 @@ fn main() {
         .bind("test", "127.0.0.1:8080", || {
             h1::H1Service::new(
                 App::new()
+                    .middleware(
+                        middleware::DefaultHeaders::new().header("X-Version", "0.2"),
+                    )
                     .service(Route::build("/resource1/index.html").finish(index))
                     .service(Route::build("/resource2/index.html").with(index_async))
                     .service(Route::build("/test1.html").finish(|| "Test\r\n"))

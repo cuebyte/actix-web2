@@ -30,7 +30,7 @@ actix-server = "0.2.0"
 actix-utils = "0.2.1"
 actix-rt = "0.1.0"
 actix-http = { git = "https://github.com/actix/actix-http.git" }
-# actix-http = { path = "../actix-http" }
+#actix-http = { path = "../actix-http" }
 actix-router = { git = "https://github.com/actix/actix-net.git" }
 
 bytes = "0.4"

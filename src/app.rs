@@ -1,16 +1,18 @@
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
 use actix_http::{Error, Request, Response};
-use actix_router::{Path, ResourceInfo, Router, Url};
-use actix_service::{IntoNewService, NewService, Service};
+use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
+use actix_service::{
+    ApplyNewService, IntoNewService, IntoNewTransform, NewService, NewTransform, Service,
+};
 use actix_utils::cloneable::CloneableService;
 use futures::future::{ok, Either, FutureResult};
-use futures::{Async, Future, Poll};
+use futures::{try_ready, Async, Future, Poll};
 
-use crate::helpers::{
-    BoxedHttpNewService, BoxedHttpService, DefaultNewService, HttpDefaultNewService,
-};
+use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpDefaultNewService};
+use crate::pred::Predicate;
 use crate::request::HttpRequest;
 use crate::service::{ServiceRequest, ServiceResponse};
 use crate::state::{State, StateFactory};
@@ -20,19 +22,22 @@ type BoxedResponse = Box<Future<Item = ServiceResponse, Error = ()>>;
 pub trait HttpServiceFactory<Request> {
     type Factory: NewService<Request = Request>;
 
-    fn path(&self) -> &str;
+    fn rdef(&self) -> &ResourceDef;
 
     fn create(self) -> Self::Factory;
 }
 
 /// Application builder
-pub struct App<S = ()> {
+pub struct App<S, T> {
     services: Vec<(
-        String,
+        ResourceDef,
         BoxedHttpNewService<ServiceRequest<S>, ServiceResponse>,
     )>,
     default: Option<HttpDefaultNewService<HttpRequest<S>, Response>>,
     state: AppState<S>,
+    filters: Vec<Box<Predicate<S>>>,
+    endpoint: T,
+    factory_ref: Rc<RefCell<Option<AppFactory<S>>>>,
 }
 
 /// Application state
@@ -41,25 +46,21 @@ enum AppState<S> {
     Fn(Box<StateFactory<S>>),
 }
 
-impl App<()> {
+impl App<(), AppEndpoint<()>> {
     /// Create application with empty state. Application can
     /// be configured with a builder-like pattern.
     pub fn new() -> Self {
-        App {
-            services: Vec::new(),
-            default: None,
-            state: AppState::St(State::new(())),
-        }
+        App::create(AppState::St(State::new(())))
     }
 }
 
-impl Default for App<()> {
+impl Default for App<(), AppEndpoint<()>> {
     fn default() -> Self {
         App::new()
     }
 }
 
-impl<S: 'static> App<S> {
+impl<S: 'static> App<S, AppEndpoint<S>> {
     /// Create application with specified state. Application can be
     /// configured with a builder-like pattern.
     ///
@@ -73,11 +74,7 @@ impl<S: 'static> App<S> {
     /// threads, a shared object should be used, e.g. `Arc`. Application
     /// state does not need to be `Send` or `Sync`.
     pub fn with_state(state: S) -> Self {
-        App {
-            services: Vec::new(),
-            default: None,
-            state: AppState::St(State::new(state)),
-        }
+        App::create(AppState::St(State::new(state)))
     }
 
     /// Create application with specified state. This function is
@@ -87,42 +84,112 @@ impl<S: 'static> App<S> {
     where
         F: StateFactory<S> + 'static,
     {
+        App::create(AppState::Fn(Box::new(state)))
+    }
+
+    fn create(state: AppState<S>) -> Self {
+        let fref = Rc::new(RefCell::new(None));
         App {
+            state,
             services: Vec::new(),
             default: None,
-            state: AppState::Fn(Box::new(state)),
+            filters: Vec::new(),
+            endpoint: AppEndpoint::new(fref.clone()),
+            factory_ref: fref,
         }
+    }
+}
+
+impl<S: 'static, T> App<S, T>
+where
+    T: NewService<
+        Request = Request,
+        Response = ServiceResponse,
+        Error = (),
+        InitError = (),
+    >,
+{
+    /// Add match predicate to application.
+    ///
+    /// ```rust
+    /// # extern crate actix_web2;
+    /// # use actix_web2::*;
+    /// # fn main() {
+    /// App::new()
+    ///     .filter(pred::Host("www.rust-lang.org"))
+    ///     .resource("/path", |r| r.f(|_| HttpResponse::Ok()))
+    /// #      .finish();
+    /// # }
+    /// ```
+    pub fn filter<P: Predicate<S> + 'static>(mut self, p: P) -> Self {
+        self.filters.push(Box::new(p));
+        self
     }
 
     /// Register resource handler service.
-    pub fn service<T>(mut self, factory: T) -> Self
+    pub fn service<F>(mut self, factory: F) -> Self
     where
-        T: HttpServiceFactory<ServiceRequest<S>> + 'static,
-        T::Factory: NewService<
+        F: HttpServiceFactory<ServiceRequest<S>> + 'static,
+        F::Factory: NewService<
                 Request = ServiceRequest<S>,
                 Response = ServiceResponse,
                 Error = Error,
             > + 'static,
-        <T::Factory as NewService>::Future: 'static,
-        <<T::Factory as NewService>::Service as Service>::Future: 'static,
+        <F::Factory as NewService>::Future: 'static,
+        <<F::Factory as NewService>::Service as Service>::Future: 'static,
     {
-        let path = factory.path().to_string();
+        let rdef = factory.rdef().clone();
         self.services
-            .push((path, Box::new(HttpNewService::new(factory.create()))));
+            .push((rdef, Box::new(HttpNewService::new(factory.create()))));
         self
     }
 
-    /// Default resource to be used if no matching route could be found.
-    pub fn default_service<T, F: IntoNewService<T>>(mut self, factory: F) -> Self
+    /// Register a middleware.
+    pub fn middleware<M, F>(
+        self,
+        mw: F,
+    ) -> App<
+        S,
+        impl NewService<
+            Request = Request,
+            Response = ServiceResponse,
+            Error = (),
+            InitError = (),
+        >,
+    >
     where
-        T: NewService<Request = HttpRequest<S>, Response = Response> + 'static,
-        T::Future: 'static,
-        <T::Service as Service>::Future: 'static,
+        M: NewTransform<
+            T::Service,
+            Request = Request,
+            Response = ServiceResponse,
+            Error = (),
+            InitError = (),
+        >,
+        // M::Error: Into<Error>,
+        F: IntoNewTransform<M, T::Service>,
     {
-        self.default =
-            Some(Box::new(DefaultNewService::new(factory.into_new_service())));
-        self
+        let endpoint = ApplyNewService::new(mw, self.endpoint);
+        App {
+            endpoint,
+            state: self.state,
+            services: self.services,
+            default: self.default,
+            filters: self.filters,
+            factory_ref: self.factory_ref,
+        }
     }
+
+    // /// Default resource to be used if no matching route could be found.
+    // pub fn default_service<U, F: IntoNewService<T>>(mut self, factory: F) -> Self
+    // where
+    //     U: NewService<Request = HttpRequest<S>, Response = Response> + 'static,
+    //     U::Future: 'static,
+    //     <U::Service as Service>::Future: 'static,
+    // {
+    //     self.default =
+    //         Some(Box::new(DefaultNewService::new(factory.into_new_service())));
+    //     self
+    // }
 
     /// Register an external resource.
     ///
@@ -147,9 +214,9 @@ impl<S: 'static> App<S> {
     ///         .finish();
     /// }
     /// ```
-    pub fn external_resource<T, U>(self, _name: T, _url: U) -> App<S>
+    pub fn external_resource<N, U>(self, _name: N, _url: U) -> Self
     where
-        T: AsRef<str>,
+        N: AsRef<str>,
         U: AsRef<str>,
     {
         // self.parts
@@ -161,12 +228,23 @@ impl<S: 'static> App<S> {
     }
 }
 
-impl<S: 'static> IntoNewService<AppFactory<S>> for App<S> {
-    fn into_new_service(self) -> AppFactory<S> {
-        AppFactory {
+impl<S: 'static, T> IntoNewService<T> for App<S, T>
+where
+    T: NewService<
+        Request = Request,
+        Response = ServiceResponse,
+        Error = (),
+        InitError = (),
+    >,
+{
+    fn into_new_service(self) -> T {
+        *self.factory_ref.borrow_mut() = Some(AppFactory {
             state: Rc::new(self.state),
             services: Rc::new(self.services),
-        }
+            filters: Rc::new(self.filters),
+        });
+
+        self.endpoint
     }
 }
 
@@ -175,10 +253,11 @@ pub struct AppFactory<S> {
     state: Rc<AppState<S>>,
     services: Rc<
         Vec<(
-            String,
+            ResourceDef,
             BoxedHttpNewService<ServiceRequest<S>, ServiceResponse>,
         )>,
     >,
+    filters: Rc<Vec<Box<Predicate<S>>>>,
 }
 
 impl<S: 'static> NewService for AppFactory<S> {
@@ -207,6 +286,11 @@ impl<S: 'static> NewService for AppFactory<S> {
                 .collect(),
             state,
             state_fut,
+            filters: if self.filters.is_empty() {
+                None
+            } else {
+                Some(self.filters.clone())
+            },
         }
     }
 }
@@ -220,11 +304,15 @@ pub struct CreateAppService<S> {
     fut: Vec<CreateAppServiceItem<S>>,
     state: Option<State<S>>,
     state_fut: Option<Box<Future<Item = S, Error = ()>>>,
+    filters: Option<Rc<Vec<Box<Predicate<S>>>>>,
 }
 
 enum CreateAppServiceItem<S> {
-    Future(Option<String>, HttpServiceFut<S>),
-    Service(String, BoxedHttpService<ServiceRequest<S>, ServiceResponse>),
+    Future(Option<ResourceDef>, HttpServiceFut<S>),
+    Service(
+        ResourceDef,
+        BoxedHttpService<ServiceRequest<S>, ServiceResponse>,
+    ),
 }
 
 impl<S: 'static> Future for CreateAppService<S> {
@@ -269,7 +357,7 @@ impl<S: 'static> Future for CreateAppService<S> {
                 .fold(Router::build(), |mut router, item| {
                     match item {
                         CreateAppServiceItem::Service(path, service) => {
-                            router.path(&path, service)
+                            router.rdef(path, service)
                         }
                         CreateAppServiceItem::Future(_, _) => unreachable!(),
                     }
@@ -279,6 +367,7 @@ impl<S: 'static> Future for CreateAppService<S> {
                 state: self.state.take().unwrap(),
                 router: router.finish(),
                 ready: None,
+                filters: self.filters.clone(),
             })))
         } else {
             Ok(Async::NotReady)
@@ -290,6 +379,7 @@ pub struct AppService<S> {
     state: State<S>,
     router: Router<BoxedHttpService<ServiceRequest<S>, ServiceResponse>>,
     ready: Option<(ServiceRequest<S>, ResourceInfo)>,
+    filters: Option<Rc<Vec<Box<Predicate<S>>>>>,
 }
 
 impl<S> Service for AppService<S> {
@@ -402,5 +492,68 @@ where
             Ok(res) => Ok(res),
             Err(e) => Ok(Response::from(e).into()),
         }))
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct AppEndpoint<S> {
+    factory: Rc<RefCell<Option<AppFactory<S>>>>,
+}
+
+impl<S> AppEndpoint<S> {
+    fn new(factory: Rc<RefCell<Option<AppFactory<S>>>>) -> Self {
+        AppEndpoint { factory }
+    }
+}
+
+impl<S: 'static> NewService for AppEndpoint<S> {
+    type Request = Request;
+    type Response = ServiceResponse;
+    type Error = ();
+    type InitError = ();
+    type Service = AppEndpointService<S>;
+    type Future = AppEndpointFactory<S>;
+
+    fn new_service(&self) -> Self::Future {
+        AppEndpointFactory {
+            fut: self.factory.borrow_mut().as_mut().unwrap().new_service(),
+        }
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct AppEndpointService<S: 'static> {
+    app: CloneableService<AppService<S>>,
+}
+
+impl<S: 'static> Service for AppEndpointService<S> {
+    type Request = Request;
+    type Response = ServiceResponse;
+    type Error = ();
+    type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        self.app.poll_ready()
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        self.app.call(req)
+    }
+}
+
+#[doc(hidden)]
+pub struct AppEndpointFactory<S: 'static> {
+    fut: CreateAppService<S>,
+}
+
+impl<S: 'static> Future for AppEndpointFactory<S> {
+    type Item = AppEndpointService<S>;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let app = try_ready!(self.fut.poll());
+        Ok(Async::Ready(AppEndpointService { app }))
     }
 }
