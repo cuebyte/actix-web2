@@ -8,7 +8,6 @@ use actix_service::{
     AndThenNewService, ApplyNewService, IntoNewService, IntoNewTransform, NewService,
     NewTransform, Service,
 };
-use actix_utils::cloneable::CloneableService;
 use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, Poll};
 
@@ -305,6 +304,7 @@ where
     }
 }
 
+/// Service factory to convert `Request` to a `ServiceRequest<S>`
 pub struct AppStateFactory<S> {
     state: Rc<AppState<S>>,
 }
@@ -314,7 +314,7 @@ impl<S: 'static> NewService for AppStateFactory<S> {
     type Response = ServiceRequest<S>;
     type Error = ();
     type InitError = ();
-    type Service = CloneableService<AppStateService<S>>;
+    type Service = AppStateService<S>;
     type Future = Either<
         FutureResult<Self::Service, ()>,
         Box<Future<Item = Self::Service, Error = ()>>,
@@ -322,20 +322,17 @@ impl<S: 'static> NewService for AppStateFactory<S> {
 
     fn new_service(&self) -> Self::Future {
         match self.state.as_ref() {
-            AppState::St(ref st) => {
-                Either::A(ok(CloneableService::new(AppStateService {
-                    state: st.clone(),
-                })))
-            }
+            AppState::St(ref st) => Either::A(ok(AppStateService { state: st.clone() })),
             AppState::Fn(ref f) => Either::B(Box::new(f.construct().and_then(|st| {
-                Ok(CloneableService::new(AppStateService {
+                Ok(AppStateService {
                     state: State::new(st),
-                }))
+                })
             }))),
         }
     }
 }
 
+/// Service to convert `Request` to a `ServiceRequest<S>`
 pub struct AppStateService<S> {
     state: State<S>,
 }
@@ -359,7 +356,6 @@ impl<S> Service for AppStateService<S> {
     }
 }
 
-#[derive(Clone)]
 pub struct AppFactory<S> {
     services: Rc<
         Vec<(
@@ -375,7 +371,7 @@ impl<S: 'static> NewService for AppFactory<S> {
     type Response = Response;
     type Error = ();
     type InitError = ();
-    type Service = CloneableService<AppService<S>>;
+    type Service = AppService<S>;
     type Future = CreateAppService<S>;
 
     fn new_service(&self) -> Self::Future {
@@ -415,7 +411,7 @@ enum CreateAppServiceItem<S> {
 }
 
 impl<S: 'static> Future for CreateAppService<S> {
-    type Item = CloneableService<AppService<S>>;
+    type Item = AppService<S>;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -454,11 +450,11 @@ impl<S: 'static> Future for CreateAppService<S> {
                     }
                     router
                 });
-            Ok(Async::Ready(CloneableService::new(AppService {
+            Ok(Async::Ready(AppService {
                 router: router.finish(),
                 ready: None,
                 filters: self.filters.clone(),
-            })))
+            }))
         } else {
             Ok(Async::NotReady)
         }
@@ -584,7 +580,6 @@ where
 }
 
 #[doc(hidden)]
-#[derive(Clone)]
 pub struct AppEndpoint<S> {
     factory: Rc<RefCell<Option<AppFactory<S>>>>,
 }
@@ -611,9 +606,8 @@ impl<S: 'static> NewService for AppEndpoint<S> {
 }
 
 #[doc(hidden)]
-#[derive(Clone)]
 pub struct AppEndpointService<S: 'static> {
-    app: CloneableService<AppService<S>>,
+    app: AppService<S>,
 }
 
 impl<S: 'static> Service for AppEndpointService<S> {
