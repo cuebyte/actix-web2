@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use actix_http::{Error, Request, Response};
+use actix_http::{Request, Response};
 use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
 use actix_service::{
     AndThenNewService, ApplyNewService, IntoNewService, IntoNewTransform, NewService,
@@ -14,8 +14,8 @@ use futures::{try_ready, Async, Future, Poll};
 use crate::filter::Filter;
 use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpDefaultNewService};
 use crate::request::HttpRequest;
-use crate::resource::{Resource, ResourceBuilder};
-use crate::service::{ServiceRequest, ServiceResponse};
+use crate::resource::Resource;
+use crate::service::ServiceRequest;
 use crate::state::{State, StateFactory};
 
 type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
@@ -160,20 +160,15 @@ where
     /// ```
     pub fn resource<F, R, U>(mut self, path: &str, f: F) -> App<S, T>
     where
-        F: FnOnce(ResourceBuilder<S>) -> R,
+        F: FnOnce(Resource<S>) -> R,
         R: IntoNewService<U>,
-        U: NewService<
-                Request = ServiceRequest<S>,
-                Response = ServiceResponse,
-                Error = Error,
-            > + 'static,
-        U::Future: 'static,
-        <U::Service as Service>::Future: 'static,
+        U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
+            + 'static,
     {
         let rdef = ResourceDef::new(path);
         self.services.push((
             rdef,
-            Box::new(HttpNewService::new(f(Resource::build()).into_new_service())),
+            Box::new(HttpNewService::new(f(Resource::new()).into_new_service())),
         ));
         self
     }
@@ -183,13 +178,8 @@ where
     where
         R: Into<ResourceDef>,
         F: IntoNewService<U>,
-        U: NewService<
-                Request = ServiceRequest<S>,
-                Response = ServiceResponse,
-                Error = Error,
-            > + 'static,
-        U::Future: 'static,
-        <U::Service as Service>::Future: 'static,
+        U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
+            + 'static,
     {
         self.services.push((
             rdef.into(),
@@ -232,17 +222,20 @@ where
         }
     }
 
-    // /// Default resource to be used if no matching route could be found.
-    // pub fn default_service<U, F: IntoNewService<T>>(mut self, factory: F) -> Self
-    // where
-    //     U: NewService<Request = HttpRequest<S>, Response = Response> + 'static,
-    //     U::Future: 'static,
-    //     <U::Service as Service>::Future: 'static,
-    // {
-    //     self.default =
-    //         Some(Box::new(DefaultNewService::new(factory.into_new_service())));
-    //     self
-    // }
+    /// Default resource to be used if no matching route could be found.
+    pub fn default_resource<F, R, U>(mut self, f: F) -> App<S, T>
+    where
+        F: FnOnce(&mut Resource<S>) -> R,
+        R: IntoNewService<U>,
+        U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
+            + 'static,
+    {
+        // create and configure default resource
+        let mut resource = Resource::new();
+        let res = f(&mut resource);
+
+        self
+    }
 
     /// Register an external resource.
     ///
@@ -490,10 +483,10 @@ impl<S> Service for AppService<S> {
     }
 }
 
-pub struct AppServiceResponse(Box<Future<Item = ServiceResponse, Error = ()>>);
+pub struct AppServiceResponse(Box<Future<Item = Response, Error = ()>>);
 
 impl Future for AppServiceResponse {
-    type Item = ServiceResponse;
+    type Item = Response;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -501,18 +494,14 @@ impl Future for AppServiceResponse {
     }
 }
 
-struct HttpNewService<S, T: NewService<Request = ServiceRequest<S>, Error = Error>>(
+struct HttpNewService<S, T: NewService<Request = ServiceRequest<S>>>(
     T,
     PhantomData<(S,)>,
 );
 
 impl<S, T> HttpNewService<S, T>
 where
-    T: NewService<
-        Request = ServiceRequest<S>,
-        Response = ServiceResponse,
-        Error = Error,
-    >,
+    T: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>,
     T::Future: 'static,
     <T::Service as Service>::Future: 'static,
 {
@@ -524,11 +513,7 @@ where
 impl<S, T> NewService for HttpNewService<S, T>
 where
     S: 'static,
-    T: NewService<
-        Request = ServiceRequest<S>,
-        Response = ServiceResponse,
-        Error = Error,
-    >,
+    T: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
@@ -560,7 +545,7 @@ impl<S, T> Service for HttpServiceWrapper<S, T>
 where
     S: 'static,
     T::Future: 'static,
-    T: Service<Request = ServiceRequest<S>, Response = ServiceResponse, Error = Error>,
+    T: Service<Request = ServiceRequest<S>, Response = Response, Error = ()>,
 {
     type Request = ServiceRequest<S>;
     type Response = Response;
@@ -572,10 +557,7 @@ where
     }
 
     fn call(&mut self, req: ServiceRequest<S>) -> Self::Future {
-        Box::new(self.service.call(req).then(|res| match res {
-            Ok(res) => Ok(res.into()),
-            Err(e) => Ok(Response::from(e)),
-        }))
+        Box::new(self.service.call(req))
     }
 }
 
