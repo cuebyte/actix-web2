@@ -27,7 +27,8 @@ use futures::future::{err, ok, Either, FutureResult};
 use actix_http::error::{
     Error, ErrorBadRequest, ErrorNotFound, JsonPayloadError, UrlencodedError,
 };
-use actix_http::http::{header, StatusCode};
+use actix_http::http::{StatusCode};
+use actix_http::http::header::{self, ContentDisposition, DispositionParam, DispositionType};
 use actix_http::{HttpMessage, Response};
 use actix_router::PathDeserializer;
 

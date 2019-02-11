@@ -16,6 +16,7 @@ mod responder;
 mod route;
 mod service;
 mod state;
+mod fs;
 
 // re-export for convenience
 pub use actix_http::Response as HttpResponse;
