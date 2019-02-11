@@ -5,7 +5,8 @@ use std::rc::Rc;
 use actix_http::{Error, Request, Response};
 use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
 use actix_service::{
-    ApplyNewService, IntoNewService, IntoNewTransform, NewService, NewTransform, Service,
+    AndThenNewService, ApplyNewService, IntoNewService, IntoNewTransform, NewService,
+    NewTransform, Service,
 };
 use actix_utils::cloneable::CloneableService;
 use futures::future::{ok, Either, FutureResult};
@@ -18,7 +19,7 @@ use crate::resource::{Resource, ResourceBuilder};
 use crate::service::{ServiceRequest, ServiceResponse};
 use crate::state::{State, StateFactory};
 
-type BoxedResponse = Box<Future<Item = ServiceResponse, Error = ()>>;
+type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
 
 pub trait HttpServiceFactory<Request> {
     type Factory: NewService<Request = Request>;
@@ -32,7 +33,7 @@ pub trait HttpServiceFactory<Request> {
 pub struct App<S, T> {
     services: Vec<(
         ResourceDef,
-        BoxedHttpNewService<ServiceRequest<S>, ServiceResponse>,
+        BoxedHttpNewService<ServiceRequest<S>, Response>,
     )>,
     default: Option<HttpDefaultNewService<HttpRequest<S>, Response>>,
     state: AppState<S>,
@@ -104,8 +105,8 @@ impl<S: 'static> App<S, AppEndpoint<S>> {
 impl<S: 'static, T> App<S, T>
 where
     T: NewService<
-        Request = Request,
-        Response = ServiceResponse,
+        Request = ServiceRequest<S>,
+        Response = Response,
         Error = (),
         InitError = (),
     >,
@@ -205,8 +206,8 @@ where
     ) -> App<
         S,
         impl NewService<
-            Request = Request,
-            Response = ServiceResponse,
+            Request = ServiceRequest<S>,
+            Response = Response,
             Error = (),
             InitError = (),
         >,
@@ -214,8 +215,8 @@ where
     where
         M: NewTransform<
             T::Service,
-            Request = Request,
-            Response = ServiceResponse,
+            Request = ServiceRequest<S>,
+            Response = Response,
             Error = (),
             InitError = (),
         >,
@@ -281,51 +282,103 @@ where
     }
 }
 
-impl<S: 'static, T> IntoNewService<T> for App<S, T>
+impl<S: 'static, T> IntoNewService<AndThenNewService<AppStateFactory<S>, T>>
+    for App<S, T>
 where
     T: NewService<
-        Request = Request,
-        Response = ServiceResponse,
+        Request = ServiceRequest<S>,
+        Response = Response,
         Error = (),
         InitError = (),
     >,
 {
-    fn into_new_service(self) -> T {
+    fn into_new_service(self) -> AndThenNewService<AppStateFactory<S>, T> {
         *self.factory_ref.borrow_mut() = Some(AppFactory {
-            state: Rc::new(self.state),
             services: Rc::new(self.services),
             filters: Rc::new(self.filters),
         });
 
-        self.endpoint
+        AppStateFactory {
+            state: Rc::new(self.state),
+        }
+        .and_then(self.endpoint)
+    }
+}
+
+pub struct AppStateFactory<S> {
+    state: Rc<AppState<S>>,
+}
+
+impl<S: 'static> NewService for AppStateFactory<S> {
+    type Request = Request;
+    type Response = ServiceRequest<S>;
+    type Error = ();
+    type InitError = ();
+    type Service = CloneableService<AppStateService<S>>;
+    type Future = Either<
+        FutureResult<Self::Service, ()>,
+        Box<Future<Item = Self::Service, Error = ()>>,
+    >;
+
+    fn new_service(&self) -> Self::Future {
+        match self.state.as_ref() {
+            AppState::St(ref st) => {
+                Either::A(ok(CloneableService::new(AppStateService {
+                    state: st.clone(),
+                })))
+            }
+            AppState::Fn(ref f) => Either::B(Box::new(f.construct().and_then(|st| {
+                Ok(CloneableService::new(AppStateService {
+                    state: State::new(st),
+                }))
+            }))),
+        }
+    }
+}
+
+pub struct AppStateService<S> {
+    state: State<S>,
+}
+
+impl<S> Service for AppStateService<S> {
+    type Request = Request;
+    type Response = ServiceRequest<S>;
+    type Error = ();
+    type Future = FutureResult<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        ok(ServiceRequest::new(
+            self.state.clone(),
+            Path::new(Url::new(req.uri().clone())),
+            req,
+        ))
     }
 }
 
 #[derive(Clone)]
 pub struct AppFactory<S> {
-    state: Rc<AppState<S>>,
     services: Rc<
         Vec<(
             ResourceDef,
-            BoxedHttpNewService<ServiceRequest<S>, ServiceResponse>,
+            BoxedHttpNewService<ServiceRequest<S>, Response>,
         )>,
     >,
     filters: Rc<Vec<Box<Filter<S>>>>,
 }
 
 impl<S: 'static> NewService for AppFactory<S> {
-    type Request = Request;
-    type Response = ServiceResponse;
+    type Request = ServiceRequest<S>;
+    type Response = Response;
     type Error = ();
     type InitError = ();
     type Service = CloneableService<AppService<S>>;
     type Future = CreateAppService<S>;
 
     fn new_service(&self) -> Self::Future {
-        let (state, state_fut) = match self.state.as_ref() {
-            AppState::St(ref st) => (Some(st.clone()), None),
-            AppState::Fn(ref f) => (None, Some(f.construct())),
-        };
         CreateAppService {
             fut: self
                 .services
@@ -337,8 +390,6 @@ impl<S: 'static> NewService for AppFactory<S> {
                     )
                 })
                 .collect(),
-            state,
-            state_fut,
             filters: if self.filters.is_empty() {
                 None
             } else {
@@ -349,23 +400,18 @@ impl<S: 'static> NewService for AppFactory<S> {
 }
 
 type HttpServiceFut<S> =
-    Box<Future<Item = BoxedHttpService<ServiceRequest<S>, ServiceResponse>, Error = ()>>;
+    Box<Future<Item = BoxedHttpService<ServiceRequest<S>, Response>, Error = ()>>;
 
 /// Create app service
 #[doc(hidden)]
 pub struct CreateAppService<S> {
     fut: Vec<CreateAppServiceItem<S>>,
-    state: Option<State<S>>,
-    state_fut: Option<Box<Future<Item = S, Error = ()>>>,
     filters: Option<Rc<Vec<Box<Filter<S>>>>>,
 }
 
 enum CreateAppServiceItem<S> {
     Future(Option<ResourceDef>, HttpServiceFut<S>),
-    Service(
-        ResourceDef,
-        BoxedHttpService<ServiceRequest<S>, ServiceResponse>,
-    ),
+    Service(ResourceDef, BoxedHttpService<ServiceRequest<S>, Response>),
 }
 
 impl<S: 'static> Future for CreateAppService<S> {
@@ -374,14 +420,6 @@ impl<S: 'static> Future for CreateAppService<S> {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let mut done = true;
-
-        // poll state factory
-        if let Some(ref mut st) = self.state_fut {
-            match st.poll()? {
-                Async::Ready(state) => self.state = Some(State::new(state)),
-                Async::NotReady => done = false,
-            }
-        }
 
         // poll http services
         for item in &mut self.fut {
@@ -417,7 +455,6 @@ impl<S: 'static> Future for CreateAppService<S> {
                     router
                 });
             Ok(Async::Ready(CloneableService::new(AppService {
-                state: self.state.take().unwrap(),
                 router: router.finish(),
                 ready: None,
                 filters: self.filters.clone(),
@@ -429,15 +466,14 @@ impl<S: 'static> Future for CreateAppService<S> {
 }
 
 pub struct AppService<S> {
-    state: State<S>,
-    router: Router<BoxedHttpService<ServiceRequest<S>, ServiceResponse>>,
+    router: Router<BoxedHttpService<ServiceRequest<S>, Response>>,
     ready: Option<(ServiceRequest<S>, ResourceInfo)>,
     filters: Option<Rc<Vec<Box<Filter<S>>>>>,
 }
 
 impl<S> Service for AppService<S> {
-    type Request = Request;
-    type Response = ServiceResponse;
+    type Request = ServiceRequest<S>;
+    type Response = Response;
     type Error = ();
     type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
 
@@ -449,12 +485,11 @@ impl<S> Service for AppService<S> {
         }
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
-        let mut path = Path::new(Url::new(req.uri().clone()));
-        if let Some((srv, _info)) = self.router.recognize_mut(&mut path) {
-            Either::A(srv.call(ServiceRequest::new(self.state.clone(), path, req)))
+    fn call(&mut self, mut req: ServiceRequest<S>) -> Self::Future {
+        if let Some((srv, _info)) = self.router.recognize_mut(req.path_mut()) {
+            Either::A(srv.call(req))
         } else {
-            Either::B(ok(ServiceResponse::Unhandled(req)))
+            Either::B(ok(Response::NotFound().finish()))
         }
     }
 }
@@ -503,10 +538,10 @@ where
     <T::Service as Service>::Future: 'static,
 {
     type Request = ServiceRequest<S>;
-    type Response = ServiceResponse;
+    type Response = Response;
     type Error = ();
     type InitError = ();
-    type Service = BoxedHttpService<ServiceRequest<S>, T::Response>;
+    type Service = BoxedHttpService<ServiceRequest<S>, Self::Response>;
     type Future = Box<Future<Item = Self::Service, Error = Self::InitError>>;
 
     fn new_service(&self) -> Self::Future {
@@ -532,7 +567,7 @@ where
     T: Service<Request = ServiceRequest<S>, Response = ServiceResponse, Error = Error>,
 {
     type Request = ServiceRequest<S>;
-    type Response = ServiceResponse;
+    type Response = Response;
     type Error = ();
     type Future = BoxedResponse;
 
@@ -542,8 +577,8 @@ where
 
     fn call(&mut self, req: ServiceRequest<S>) -> Self::Future {
         Box::new(self.service.call(req).then(|res| match res {
-            Ok(res) => Ok(res),
-            Err(e) => Ok(Response::from(e).into()),
+            Ok(res) => Ok(res.into()),
+            Err(e) => Ok(Response::from(e)),
         }))
     }
 }
@@ -561,8 +596,8 @@ impl<S> AppEndpoint<S> {
 }
 
 impl<S: 'static> NewService for AppEndpoint<S> {
-    type Request = Request;
-    type Response = ServiceResponse;
+    type Request = ServiceRequest<S>;
+    type Response = Response;
     type Error = ();
     type InitError = ();
     type Service = AppEndpointService<S>;
@@ -582,8 +617,8 @@ pub struct AppEndpointService<S: 'static> {
 }
 
 impl<S: 'static> Service for AppEndpointService<S> {
-    type Request = Request;
-    type Response = ServiceResponse;
+    type Request = ServiceRequest<S>;
+    type Response = Response;
     type Error = ();
     type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
 
@@ -591,7 +626,7 @@ impl<S: 'static> Service for AppEndpointService<S> {
         self.app.poll_ready()
     }
 
-    fn call(&mut self, req: Request) -> Self::Future {
+    fn call(&mut self, req: ServiceRequest<S>) -> Self::Future {
         self.app.call(req)
     }
 }

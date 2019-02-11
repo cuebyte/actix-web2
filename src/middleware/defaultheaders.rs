@@ -1,14 +1,14 @@
-//! Default response headers
+//! Middleware for setting default response headers
 use std::rc::Rc;
 
 use actix_http::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use actix_http::http::{HeaderMap, HttpTryFrom};
-use actix_http::Request;
+use actix_http::Response;
 use actix_service::{IntoNewTransform, Service, Transform};
 use futures::{Async, Future, Poll};
 
 use crate::middleware::MiddlewareFactory;
-use crate::service::ServiceResponse;
+use crate::service::ServiceRequest;
 
 /// `Middleware` for setting default response headers.
 ///
@@ -87,9 +87,10 @@ impl DefaultHeaders {
     }
 }
 
-impl<S> IntoNewTransform<MiddlewareFactory<DefaultHeaders, S>, S> for DefaultHeaders
+impl<S, State> IntoNewTransform<MiddlewareFactory<DefaultHeaders, S>, S>
+    for DefaultHeaders
 where
-    S: Service<Request = Request, Response = ServiceResponse>,
+    S: Service<Request = ServiceRequest<State>, Response = Response>,
     S::Future: 'static,
 {
     fn into_new_transform(self) -> MiddlewareFactory<DefaultHeaders, S> {
@@ -97,13 +98,13 @@ where
     }
 }
 
-impl<S> Transform<S> for DefaultHeaders
+impl<S, State> Transform<S> for DefaultHeaders
 where
-    S: Service<Request = Request, Response = ServiceResponse>,
+    S: Service<Request = ServiceRequest<State>, Response = Response>,
     S::Future: 'static,
 {
-    type Request = S::Request;
-    type Response = S::Response;
+    type Request = ServiceRequest<State>;
+    type Response = Response;
     type Error = S::Error;
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
@@ -111,25 +112,24 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Request, srv: &mut S) -> Self::Future {
+    fn call(&mut self, req: ServiceRequest<State>, srv: &mut S) -> Self::Future {
         let inner = self.inner.clone();
 
         Box::new(srv.call(req).map(move |mut res| {
-            if let ServiceResponse::Response(ref mut res) = res {
-                // set response headers
-                for (key, value) in inner.headers.iter() {
-                    if !res.headers().contains_key(key) {
-                        res.headers_mut().insert(key, value.clone());
-                    }
-                }
-                // default content-type
-                if inner.ct && !res.headers().contains_key(CONTENT_TYPE) {
-                    res.headers_mut().insert(
-                        CONTENT_TYPE,
-                        HeaderValue::from_static("application/octet-stream"),
-                    );
+            // set response headers
+            for (key, value) in inner.headers.iter() {
+                if !res.headers().contains_key(key) {
+                    res.headers_mut().insert(key, value.clone());
                 }
             }
+            // default content-type
+            if inner.ct && !res.headers().contains_key(CONTENT_TYPE) {
+                res.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/octet-stream"),
+                );
+            }
+
             res
         }))
     }

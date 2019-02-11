@@ -37,6 +37,16 @@ impl<S> ServiceRequest<S> {
         ServiceResponse::Unhandled(self.request)
     }
 
+    #[inline]
+    pub fn path(&self) -> &Path<Url> {
+        &self.path
+    }
+
+    #[inline]
+    pub fn path_mut(&mut self) -> &mut Path<Url> {
+        &mut self.path
+    }
+
     // /// Get *ConnectionInfo* for the correct request.
     // #[inline]
     // pub fn connection_info(&self) -> Ref<ConnectionInfo> {
