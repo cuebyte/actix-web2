@@ -292,6 +292,7 @@ impl<S: 'static> ResourceBuilder<S> {
     /// # }
     /// App::new().resource("/", |r| r.route().with_async(index));
     /// ```
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_async<F, P, R>(mut self, handler: F) -> ResourceBuilder<S>
     where
         F: AsyncFactory<S, (), P, R>,

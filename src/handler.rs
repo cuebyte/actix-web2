@@ -10,7 +10,7 @@ use crate::responder::{Responder, ResponseFuture};
 
 /// Trait implemented by types that can be extracted from request.
 ///
-/// Types that implement this trait can be used with `Route::with()` method.
+/// Types that implement this trait can be used with `Route` handlers.
 pub trait FromRequest<S>: Sized {
     /// The associated error which can be returned.
     type Error: Into<Error>;
@@ -58,7 +58,7 @@ impl<S, Ex> HandlerRequest<S, Ex> {
 }
 
 /// Handler converter factory
-pub trait Factory<S, Ex, T, R>: Clone + 'static
+pub trait Factory<S, Ex, T, R>: Clone
 where
     R: Responder<S>,
 {
@@ -79,7 +79,7 @@ where
 pub struct Handle<F, S, Ex, T, R>
 where
     F: Factory<S, Ex, T, R>,
-    R: Responder<S> + 'static,
+    R: Responder<S>,
 {
     hnd: F,
     _t: PhantomData<(S, Ex, T, R)>,
@@ -88,7 +88,7 @@ where
 impl<F, S, Ex, T, R> Handle<F, S, Ex, T, R>
 where
     F: Factory<S, Ex, T, R>,
-    R: Responder<S> + 'static,
+    R: Responder<S>,
 {
     pub fn new(hnd: F) -> Self {
         Handle {
@@ -284,30 +284,29 @@ where
     }
 }
 
-pub struct Extract<S, T, Ex>
-where
-    T: FromRequest<S>,
-{
+/// Extract arguments from request
+pub struct Extract<S, Ex, T: FromRequest<S>> {
     _t: PhantomData<(S, T, Ex)>,
 }
 
-impl<S, T, Ex> Extract<S, T, Ex>
-where
-    T: FromRequest<S> + 'static,
-{
-    pub fn new() -> Extract<S, T, Ex> {
+impl<S, Ex, T: FromRequest<S>> Extract<S, Ex, T> {
+    pub fn new() -> Self {
         Extract { _t: PhantomData }
     }
 }
-impl<S, T, Ex> NewService for Extract<S, T, Ex>
-where
-    T: FromRequest<S> + 'static,
-{
+
+impl<S, Ex, T: FromRequest<S>> Default for Extract<S, Ex, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S, Ex, T: FromRequest<S>> NewService for Extract<S, Ex, T> {
     type Request = HandlerRequest<S, Ex>;
     type Response = (T, HandlerRequest<S, Ex>);
     type Error = Error;
     type InitError = ();
-    type Service = ExtractService<S, T, Ex>;
+    type Service = ExtractService<S, Ex, T>;
     type Future = FutureResult<Self::Service, ()>;
 
     fn new_service(&self) -> Self::Future {
@@ -315,21 +314,15 @@ where
     }
 }
 
-pub struct ExtractService<S, T, Ex>
-where
-    T: FromRequest<S>,
-{
-    _t: PhantomData<(S, T, Ex)>,
+pub struct ExtractService<S, Ex, T: FromRequest<S>> {
+    _t: PhantomData<(S, Ex, T)>,
 }
 
-impl<S, T, Ex> Service for ExtractService<S, T, Ex>
-where
-    T: FromRequest<S> + 'static,
-{
+impl<S, Ex, T: FromRequest<S>> Service for ExtractService<S, Ex, T> {
     type Request = HandlerRequest<S, Ex>;
     type Response = (T, HandlerRequest<S, Ex>);
     type Error = Error;
-    type Future = ExtractResponse<S, T, Ex>;
+    type Future = ExtractResponse<S, Ex, T>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
@@ -343,18 +336,12 @@ where
     }
 }
 
-pub struct ExtractResponse<S, T, Ex>
-where
-    T: FromRequest<S> + 'static,
-{
+pub struct ExtractResponse<S, Ex, T: FromRequest<S>> {
     req: Option<HandlerRequest<S, Ex>>,
     fut: T::Future,
 }
 
-impl<S, T, Ex> Future for ExtractResponse<S, T, Ex>
-where
-    T: FromRequest<S> + 'static,
-{
+impl<S, Ex, T: FromRequest<S>> Future for ExtractResponse<S, Ex, T> {
     type Item = (T, HandlerRequest<S, Ex>);
     type Error = Error;
 
@@ -364,6 +351,7 @@ where
     }
 }
 
+/// FromRequest trait impl for tuples
 macro_rules! factory_tuple ({ ($(($nex:tt, $Ex:ident)),+), $(($n:tt, $T:ident)),+} => {
     impl<Func, S, $($Ex,)+ $($T,)+ Res> Factory<S, ($($Ex,)+), ($($T,)+), Res> for Func
     where Func: Fn($($Ex,)+ $($T,)+) -> Res + Clone + 'static,

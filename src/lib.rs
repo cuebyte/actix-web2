@@ -8,7 +8,7 @@ mod extractor;
 pub mod handler;
 mod helpers;
 // mod info;
-mod filter;
+pub mod filter;
 pub mod middleware;
 mod request;
 mod resource;

@@ -114,7 +114,7 @@ impl<S> RouteService<S> {
                 return false;
             }
         }
-        return true;
+        true
     }
 }
 
@@ -301,6 +301,7 @@ impl<S: 'static> RouteBuilder<S> {
     ///     ); // <- use `with` extractor
     /// }
     /// ```
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_async<F, P, R>(self, handler: F) -> Route<S>
     where
         F: AsyncFactory<S, (), P, R>,

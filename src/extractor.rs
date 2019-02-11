@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::{fmt, str};
@@ -819,13 +818,12 @@ where
 }
 
 /// Payload configuration for request's payload.
-pub struct PayloadConfig<S> {
+pub struct PayloadConfig {
     limit: usize,
     mimetype: Option<Mime>,
-    _t: PhantomData<S>,
 }
 
-impl<S> PayloadConfig<S> {
+impl PayloadConfig {
     /// Change max size of payload. By default max size is 256Kb
     pub fn limit(&mut self, limit: usize) -> &mut Self {
         self.limit = limit;
@@ -839,7 +837,7 @@ impl<S> PayloadConfig<S> {
         self
     }
 
-    fn check_mimetype(&self, req: &HttpRequest<S>) -> Result<(), Error> {
+    fn check_mimetype<S>(&self, req: &HttpRequest<S>) -> Result<(), Error> {
         // check content-type
         if let Some(ref mt) = self.mimetype {
             match req.mime_type() {
@@ -860,12 +858,11 @@ impl<S> PayloadConfig<S> {
     }
 }
 
-impl<S> Default for PayloadConfig<S> {
+impl Default for PayloadConfig {
     fn default() -> Self {
         PayloadConfig {
             limit: 262_144,
             mimetype: None,
-            _t: PhantomData,
         }
     }
 }
@@ -882,7 +879,6 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
             $fut_type {
                 items: <($(Option<$T>,)+)>::default(),
                 futs: ($($T::from_request(req),)+),
-                _t: PhantomData,
             }
         }
     }
@@ -891,7 +887,6 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
     pub struct $fut_type<S, $($T: FromRequest<S>),+> {
         items: ($(Option<$T>,)+),
         futs: ($($T::Future,)+),
-        _t: PhantomData<S>,
     }
 
     impl<S, $($T: FromRequest<S>),+> Future for $fut_type<S, $($T),+>
