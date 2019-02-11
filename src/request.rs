@@ -164,12 +164,11 @@ impl<S> HttpMessage for HttpRequest<S> {
 }
 
 impl<S> FromRequest<S> for HttpRequest<S> {
-    type Config = ();
     type Error = Error;
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>, _: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>) -> Self::Future {
         ok(req.clone())
     }
 }

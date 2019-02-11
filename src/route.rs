@@ -202,6 +202,62 @@ impl<S: 'static> RouteBuilder<S> {
     //     }
     // }
 
+    /// Set handler function, use request extractor for parameters.
+    ///
+    /// ```rust
+    /// # extern crate bytes;
+    /// # extern crate actix_web;
+    /// # extern crate futures;
+    /// #[macro_use] extern crate serde_derive;
+    /// use actix_web::{http, App, Path, Result};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Info {
+    ///     username: String,
+    /// }
+    ///
+    /// /// extract path info using serde
+    /// fn index(info: Path<Info>) -> Result<String> {
+    ///     Ok(format!("Welcome {}!", info.username))
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new().resource(
+    ///         "/{username}/index.html", // <- define path parameters
+    ///         |r| r.method(http::Method::GET).with(index),
+    ///     ); // <- use `with` extractor
+    /// }
+    /// ```
+    ///
+    /// It is possible to use multiple extractors for one handler function.
+    ///
+    /// ```rust
+    /// # extern crate bytes;
+    /// # extern crate actix_web;
+    /// # extern crate futures;
+    /// #[macro_use] extern crate serde_derive;
+    /// # use std::collections::HashMap;
+    /// use actix_web::{http, App, Json, Path, Query, Result};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Info {
+    ///     username: String,
+    /// }
+    ///
+    /// /// extract path info using serde
+    /// fn index(
+    ///     path: Path<Info>, query: Query<HashMap<String, String>>, body: Json<Info>,
+    /// ) -> Result<String> {
+    ///     Ok(format!("Welcome {}!", path.username))
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new().resource(
+    ///         "/{username}/index.html", // <- define path parameters
+    ///         |r| r.method(http::Method::GET).with(index),
+    ///     ); // <- use `with` extractor
+    /// }
+    /// ```
     pub fn to<F, P, R>(self, handler: F) -> Route<S>
     where
         F: Factory<S, (), P, R> + 'static,
@@ -210,12 +266,41 @@ impl<S: 'static> RouteBuilder<S> {
     {
         Route {
             service: Box::new(RouteNewService::new(
-                Extract::new(P::Config::default()).and_then(Handle::new(handler)),
+                Extract::new().and_then(Handle::new(handler)),
             )),
             filters: Rc::new(self.filters),
         }
     }
 
+    /// Set async handler function, use request extractor for parameters.
+    /// Also this method needs to be used if your handler function returns
+    /// `impl Future<>`
+    ///
+    /// ```rust
+    /// # extern crate bytes;
+    /// # extern crate actix_web;
+    /// # extern crate futures;
+    /// #[macro_use] extern crate serde_derive;
+    /// use actix_web::{http, App, Error, Path};
+    /// use futures::Future;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Info {
+    ///     username: String,
+    /// }
+    ///
+    /// /// extract path info using serde
+    /// fn index(info: Path<Info>) -> Box<Future<Item = &'static str, Error = Error>> {
+    ///     unimplemented!()
+    /// }
+    ///
+    /// fn main() {
+    ///     let app = App::new().resource(
+    ///         "/{username}/index.html", // <- define path parameters
+    ///         |r| r.method(http::Method::GET).with_async(index),
+    ///     ); // <- use `with` extractor
+    /// }
+    /// ```
     pub fn to_async<F, P, R>(self, handler: F) -> Route<S>
     where
         F: AsyncFactory<S, (), P, R>,
@@ -226,7 +311,7 @@ impl<S: 'static> RouteBuilder<S> {
     {
         Route {
             service: Box::new(RouteNewService::new(
-                Extract::new(P::Config::default()).then(AsyncHandle::new(handler)),
+                Extract::new().then(AsyncHandle::new(handler)),
             )),
             filters: Rc::new(self.filters),
         }

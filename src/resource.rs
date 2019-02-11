@@ -237,6 +237,24 @@ impl<S: 'static> ResourceBuilder<S> {
         self
     }
 
+    /// Register a new route and add handler.
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// use actix_web::*;
+    /// fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
+    ///
+    /// App::new().resource("/", |r| r.with(index));
+    /// ```
+    ///
+    /// This is shortcut for:
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// # use actix_web::*;
+    /// # fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
+    /// App::new().resource("/", |r| r.route().with(index));
+    /// ```
     pub fn to<F, P, R>(mut self, handler: F) -> ResourceBuilder<S>
     where
         F: Factory<S, (), P, R> + 'static,
@@ -247,6 +265,33 @@ impl<S: 'static> ResourceBuilder<S> {
         self
     }
 
+    /// Register a new route and add async handler.
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// # extern crate futures;
+    /// use actix_web::*;
+    /// use futures::future::Future;
+    ///
+    /// fn index(req: HttpRequest) -> Box<Future<Item=HttpResponse, Error=Error>> {
+    ///     unimplemented!()
+    /// }
+    ///
+    /// App::new().resource("/", |r| r.with_async(index));
+    /// ```
+    ///
+    /// This is shortcut for:
+    ///
+    /// ```rust
+    /// # extern crate actix_web;
+    /// # extern crate futures;
+    /// # use actix_web::*;
+    /// # use futures::future::Future;
+    /// # fn index(req: HttpRequest) -> Box<Future<Item=HttpResponse, Error=Error>> {
+    /// #     unimplemented!()
+    /// # }
+    /// App::new().resource("/", |r| r.route().with_async(index));
+    /// ```
     pub fn to_async<F, P, R>(mut self, handler: F) -> ResourceBuilder<S>
     where
         F: AsyncFactory<S, (), P, R>,
@@ -258,6 +303,16 @@ impl<S: 'static> ResourceBuilder<S> {
         self.routes.push(Route::build().to_async(handler));
         self
     }
+
+    // /// Register a resource middleware
+    // ///
+    // /// This is similar to `App's` middlewares, but
+    // /// middlewares get invoked on resource level.
+    // pub fn middleware<M: Middleware<S>>(&mut self, mw: M) {
+    //     Rc::get_mut(&mut self.middlewares)
+    //         .unwrap()
+    //         .push(Box::new(mw));
+    // }
 }
 
 impl<S: 'static> IntoNewService<Resource<S>> for ResourceBuilder<S> {

@@ -36,12 +36,11 @@ impl<S> Clone for State<S> {
 }
 
 impl<S> FromRequest<S> for State<S> {
-    type Config = ();
     type Error = Error;
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>, _: &Self::Config) -> Self::Future {
+    fn from_request(req: &HttpRequest<S>) -> Self::Future {
         ok(req.get_state())
     }
 }

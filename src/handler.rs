@@ -1,5 +1,4 @@
 use std::marker::PhantomData;
-use std::rc::Rc;
 
 use actix_http::{Error, Response};
 use actix_service::{NewService, Service};
@@ -13,9 +12,6 @@ use crate::responder::{Responder, ResponseFuture};
 ///
 /// Types that implement this trait can be used with `Route::with()` method.
 pub trait FromRequest<S>: Sized {
-    /// Configuration for conversion process
-    type Config: Default;
-
     /// The associated error which can be returned.
     type Error: Into<Error>;
 
@@ -23,14 +19,7 @@ pub trait FromRequest<S>: Sized {
     type Future: Future<Item = Self, Error = Self::Error>;
 
     /// Convert request to a Self
-    fn from_request(req: &HttpRequest<S>, cfg: &Self::Config) -> Self::Future;
-
-    /// Convert request to a Self
-    ///
-    /// This method uses default extractor configuration
-    fn extract(req: &HttpRequest<S>) -> Self::Future {
-        Self::from_request(req, &Self::Config::default())
-    }
+    fn from_request(req: &HttpRequest<S>) -> Self::Future;
 }
 
 pub struct HandlerRequest<S, Ex = ()> {
@@ -299,19 +288,15 @@ pub struct Extract<S, T, Ex>
 where
     T: FromRequest<S>,
 {
-    cfg: Rc<T::Config>,
-    _t: PhantomData<Ex>,
+    _t: PhantomData<(S, T, Ex)>,
 }
 
 impl<S, T, Ex> Extract<S, T, Ex>
 where
     T: FromRequest<S> + 'static,
 {
-    pub fn new(cfg: T::Config) -> Extract<S, T, Ex> {
-        Extract {
-            cfg: Rc::new(cfg),
-            _t: PhantomData,
-        }
+    pub fn new() -> Extract<S, T, Ex> {
+        Extract { _t: PhantomData }
     }
 }
 impl<S, T, Ex> NewService for Extract<S, T, Ex>
@@ -326,10 +311,7 @@ where
     type Future = FutureResult<Self::Service, ()>;
 
     fn new_service(&self) -> Self::Future {
-        ok(ExtractService {
-            cfg: self.cfg.clone(),
-            _t: PhantomData,
-        })
+        ok(ExtractService { _t: PhantomData })
     }
 }
 
@@ -337,8 +319,7 @@ pub struct ExtractService<S, T, Ex>
 where
     T: FromRequest<S>,
 {
-    cfg: Rc<T::Config>,
-    _t: PhantomData<Ex>,
+    _t: PhantomData<(S, T, Ex)>,
 }
 
 impl<S, T, Ex> Service for ExtractService<S, T, Ex>
@@ -356,7 +337,7 @@ where
 
     fn call(&mut self, req: HandlerRequest<S, Ex>) -> Self::Future {
         ExtractResponse {
-            fut: T::from_request(req.request(), self.cfg.as_ref()),
+            fut: T::from_request(req.request()),
             req: Some(req),
         }
     }
