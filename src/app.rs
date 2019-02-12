@@ -12,8 +12,9 @@ use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, Poll};
 
 use crate::filter::Filter;
-use crate::helpers::{BoxedHttpNewService, BoxedHttpService, HttpDefaultNewService};
-use crate::request::HttpRequest;
+use crate::helpers::{
+    BoxedHttpNewService, BoxedHttpService, DefaultNewService, HttpDefaultNewService,
+};
 use crate::resource::Resource;
 use crate::service::ServiceRequest;
 use crate::state::{State, StateFactory};
@@ -34,7 +35,9 @@ pub struct App<S, T> {
         ResourceDef,
         BoxedHttpNewService<ServiceRequest<S>, Response>,
     )>,
-    default: Option<HttpDefaultNewService<HttpRequest<S>, Response>>,
+    default: Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>,
+    defaults:
+        Vec<Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>>,
     state: AppState<S>,
     filters: Vec<Box<Filter<S>>>,
     endpoint: T,
@@ -94,6 +97,7 @@ impl<S: 'static> App<S, AppEndpoint<S>> {
             state,
             services: Vec::new(),
             default: None,
+            defaults: Vec::new(),
             filters: Vec::new(),
             endpoint: AppEndpoint::new(fref.clone()),
             factory_ref: fref,
@@ -158,17 +162,22 @@ where
     ///     });
     /// }
     /// ```
-    pub fn resource<F, R, U>(mut self, path: &str, f: F) -> App<S, T>
+    pub fn resource<F, U>(mut self, path: &str, f: F) -> App<S, T>
     where
-        F: FnOnce(Resource<S>) -> R,
-        R: IntoNewService<U>,
-        U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
-            + 'static,
+        F: FnOnce(Resource<S>) -> Resource<S, U>,
+        U: NewService<
+                Request = ServiceRequest<S>,
+                Response = Response,
+                Error = (),
+                InitError = (),
+            > + 'static,
     {
         let rdef = ResourceDef::new(path);
+        let resource = f(Resource::new());
+        self.defaults.push(resource.get_default());
         self.services.push((
             rdef,
-            Box::new(HttpNewService::new(f(Resource::new()).into_new_service())),
+            Box::new(HttpNewService::new(resource.into_new_service())),
         ));
         self
     }
@@ -217,6 +226,7 @@ where
             state: self.state,
             services: self.services,
             default: self.default,
+            defaults: Vec::new(),
             filters: self.filters,
             factory_ref: self.factory_ref,
         }
@@ -225,14 +235,15 @@ where
     /// Default resource to be used if no matching route could be found.
     pub fn default_resource<F, R, U>(mut self, f: F) -> App<S, T>
     where
-        F: FnOnce(&mut Resource<S>) -> R,
+        F: FnOnce(Resource<S>) -> R,
         R: IntoNewService<U>,
         U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
             + 'static,
     {
         // create and configure default resource
-        let mut resource = Resource::new();
-        let res = f(&mut resource);
+        self.default = Some(Rc::new(Box::new(DefaultNewService::new(
+            f(Resource::new()).into_new_service(),
+        ))));
 
         self
     }
@@ -285,6 +296,16 @@ where
     >,
 {
     fn into_new_service(self) -> AndThenNewService<AppStateFactory<S>, T> {
+        // update resource default service
+        if self.default.is_some() {
+            for default in &self.defaults {
+                if default.borrow_mut().is_none() {
+                    *default.borrow_mut() = self.default.clone();
+                }
+            }
+        }
+
+        // set factory
         *self.factory_ref.borrow_mut() = Some(AppFactory {
             services: Rc::new(self.services),
             filters: Rc::new(self.filters),

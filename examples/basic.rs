@@ -1,6 +1,6 @@
 use futures::IntoFuture;
 
-use actix_http::{h1, http::Method};
+use actix_http::{h1, http::Method, Response};
 use actix_server::Server;
 use actix_web2::{middleware, App, Error, HttpRequest, Resource};
 
@@ -38,6 +38,7 @@ fn main() {
                                 middleware::DefaultHeaders::new()
                                     .header("X-Version-R2", "0.3"),
                             )
+                            .default_resource(|r| r.to(|| Response::MethodNotAllowed()))
                             .method(Method::GET, |r| r.to_async(index_async)),
                     )
                     .service("/test1.html", Resource::new().to(|| "Test\r\n"))
