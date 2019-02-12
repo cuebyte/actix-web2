@@ -30,17 +30,18 @@ fn main() {
                     .middleware(
                         middleware::DefaultHeaders::new().header("X-Version", "0.2"),
                     )
-                    .service(
-                        "/resource1/index.html",
-                        Resource::build().get(|r| r.to(index)),
-                    )
+                    .resource("/resource1/index.html", |r| r.get(|r| r.to(index)))
                     .service(
                         "/resource2/index.html",
-                        Resource::build()
+                        Resource::new()
+                            .middleware(
+                                middleware::DefaultHeaders::new()
+                                    .header("X-Version-R2", "0.3"),
+                            )
                             .method(Method::GET, |r| r.to_async(index_async)),
                     )
-                    .service("/test1.html", Resource::build().to(|| "Test\r\n"))
-                    .service("/", Resource::build().to(no_params)),
+                    .service("/test1.html", Resource::new().to(|| "Test\r\n"))
+                    .service("/", Resource::new().to(no_params)),
             )
         })
         .unwrap()

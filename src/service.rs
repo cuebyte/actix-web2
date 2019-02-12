@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use actix_http::{Request, Response};
+use actix_http::Request;
 use actix_router::{Path, Url};
 
 use crate::request::HttpRequest;
@@ -33,11 +33,6 @@ impl<S> ServiceRequest<S> {
     }
 
     #[inline]
-    pub fn into_response(self) -> ServiceResponse {
-        ServiceResponse::Unhandled(self.request)
-    }
-
-    #[inline]
     pub fn path(&self) -> &Path<Url> {
         &self.path
     }
@@ -65,27 +60,5 @@ impl<S> Deref for ServiceRequest<S> {
 impl<S> DerefMut for ServiceRequest<S> {
     fn deref_mut(&mut self) -> &mut Request {
         &mut self.request
-    }
-}
-
-#[derive(From)]
-/// Http service response type
-pub enum ServiceResponse {
-    Response(Response),
-    Unhandled(Request),
-}
-
-impl Into<Response> for ServiceResponse {
-    fn into(self) -> Response {
-        match self {
-            ServiceResponse::Response(res) => res,
-            ServiceResponse::Unhandled(_) => Response::NotFound().finish(),
-        }
-    }
-}
-
-impl<S> From<ServiceRequest<S>> for ServiceResponse {
-    fn from(req: ServiceRequest<S>) -> Self {
-        ServiceResponse::Unhandled(req.request)
     }
 }
