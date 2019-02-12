@@ -821,11 +821,13 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
         self.default = Box::new(WrapHandler::new(handler));
         self
     }
+}
 
-    fn try_handle(
-        &self,
-        req: &HttpRequest<S>,
-    ) -> Result<AsyncResult<Response>, Error> {
+impl<S: 'static, C: 'static + StaticFileConfig> Responder<S> for StaticFiles<S, C> {
+    type Future = FutureResult<Response, Error>;
+    type Error = StaticFileError;
+
+    fn respond_to(self, req: &HttpRequest<S>) -> Self::Future {
         let tail: String = req.match_info().get_decoded("tail").unwrap_or_else(|| "".to_string());
         let relpath = PathBuf::from_param(tail.trim_left_matches('/'))?;
 
@@ -852,17 +854,6 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
                 .respond_to(&req)?
                 .respond_to(&req)
         }
-    }
-}
-
-impl<S: 'static, C: 'static + StaticFileConfig> Handler<S> for StaticFiles<S, C> {
-    type Result = Result<AsyncResult<Response>, Error>;
-
-    fn handle(&self, req: &HttpRequest<S>) -> Self::Result {
-        self.try_handle(req).or_else(|e| {
-            debug!("StaticFiles: Failed to handle {}: {}", req.path(), e);
-            Ok(self.default.handle(req))
-        })
     }
 }
 
