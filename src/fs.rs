@@ -6,12 +6,14 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{cmp, io};
+use std::{env, cmp, io};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-use log::debug;
+use log::{error};
 use v_htmlescape::escape as escape_html_entity;
 use bytes::Bytes;
 use futures::{Async, Future, Poll, Stream};
@@ -19,16 +21,12 @@ use futures_cpupool::{CpuFuture, CpuPool};
 use mime;
 use mime_guess::{get_mime_type, guess_mime_type};
 use percent_encoding::{utf8_percent_encode, DEFAULT_ENCODE_SET};
-use derive_more::{Display, From};
+use derive_more::{Display};
+use parking_lot::Mutex;
 
-// use error::{Error, StaticFileError};
-
-use crate::handler::{
-    AsyncFactory, AsyncHandle, Extract, Factory, FromRequest, Handle, HandlerRequest,
-};
-use futures::future::{err, ok, Either, FutureResult};
+use futures::future::{self, FutureResult};
 use actix_http::error::{
-    Error, ErrorBadRequest, ErrorNotFound, JsonPayloadError, UrlencodedError,
+    Error,
 };
 use actix_service::{IntoNewService, NewService, Service};
 use actix_http::http::{ContentEncoding, Method, StatusCode};
@@ -40,14 +38,15 @@ use actix_router::PathDeserializer;
 use crate::request::HttpRequest;
 use crate::responder::Responder;
 use crate::service::ServiceRequest;
+use crate::resource::Resource;
+use crate::helpers::{HttpDefaultNewService};
 
 // use header;
 // use header::{ContentDisposition, DispositionParam, DispositionType};
 // use http::{ContentEncoding, Method, StatusCode};
 // use httpmessage::HttpMessage;
 // use httprequest::HttpRequest;
-use param::FromParam;
-use server::settings::DEFAULT_CPUPOOL;
+// use param::FromParam;
 
 ///Describes `StaticFiles` configiration
 ///
@@ -409,7 +408,7 @@ impl<C: StaticFileConfig, S> Responder<S> for NamedFile<C> {
     type Future = FutureResult<Response, Error>;
     type Error = Error;
 
-    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, req: &HttpRequest<S>) -> Self::Future {
         if self.status_code != StatusCode::OK {
             let mut resp = Response::build(self.status_code);
             resp.set(header::ContentType(self.content_type.clone()))
@@ -417,23 +416,24 @@ impl<C: StaticFileConfig, S> Responder<S> for NamedFile<C> {
                     header::CONTENT_DISPOSITION,
                     self.content_disposition.to_string(),
                 );
-
-            if let Some(current_encoding) = self.encoding {
-                resp.content_encoding(current_encoding);
-            }
+            // TODO blocking by compressing
+            // if let Some(current_encoding) = self.encoding {
+            //     resp.content_encoding(current_encoding);
+            // }
             let reader = ChunkedReadFile {
                 size: self.md.len(),
                 offset: 0,
-                cpu_pool: self.cpu_pool.unwrap_or_else(|| req.cpu_pool().clone()),
+                cpu_pool: self.cpu_pool
+                    .unwrap_or_else(|| DEFAULT_CPUPOOL.lock().clone()),
                 file: Some(self.file),
                 fut: None,
                 counter: 0,
             };
-            return Ok(resp.streaming(reader));
+            return future::ok(resp.streaming(reader));
         }
 
         if !C::is_method_allowed(req.method()) {
-            return Ok(Response::MethodNotAllowed()
+            return future::ok(Response::MethodNotAllowed()
                 .header(header::CONTENT_TYPE, "text/plain")
                 .header(header::ALLOW, "GET, HEAD")
                 .body("This resource only supports GET and HEAD."));
@@ -476,10 +476,10 @@ impl<C: StaticFileConfig, S> Responder<S> for NamedFile<C> {
                 header::CONTENT_DISPOSITION,
                 self.content_disposition.to_string(),
             );
-
-        if let Some(current_encoding) = self.encoding {
-            resp.content_encoding(current_encoding);
-        }
+        // TODO blocking by compressing
+        // if let Some(current_encoding) = self.encoding {
+        //     resp.content_encoding(current_encoding);
+        // }
 
         resp.if_some(last_modified, |lm, resp| {
             resp.set(header::LastModified(lm));
@@ -498,7 +498,8 @@ impl<C: StaticFileConfig, S> Responder<S> for NamedFile<C> {
                 if let Ok(rangesvec) = HttpRange::parse(rangesheader, length) {
                     length = rangesvec[0].length;
                     offset = rangesvec[0].start;
-                    resp.content_encoding(ContentEncoding::Identity);
+                    // TODO blocking by compressing
+                    // resp.content_encoding(ContentEncoding::Identity);
                     resp.header(
                         header::CONTENT_RANGE,
                         format!(
@@ -510,36 +511,36 @@ impl<C: StaticFileConfig, S> Responder<S> for NamedFile<C> {
                     );
                 } else {
                     resp.header(header::CONTENT_RANGE, format!("bytes */{}", length));
-                    return Ok(resp.status(StatusCode::RANGE_NOT_SATISFIABLE).finish());
+                    return future::ok(resp.status(StatusCode::RANGE_NOT_SATISFIABLE).finish());
                 };
             } else {
-                return Ok(resp.status(StatusCode::BAD_REQUEST).finish());
+                return future::ok(resp.status(StatusCode::BAD_REQUEST).finish());
             };
         };
 
         resp.header(header::CONTENT_LENGTH, format!("{}", length));
 
         if precondition_failed {
-            return Ok(resp.status(StatusCode::PRECONDITION_FAILED).finish());
+            return future::ok(resp.status(StatusCode::PRECONDITION_FAILED).finish());
         } else if not_modified {
-            return Ok(resp.status(StatusCode::NOT_MODIFIED).finish());
+            return future::ok(resp.status(StatusCode::NOT_MODIFIED).finish());
         }
 
         if *req.method() == Method::HEAD {
-            Ok(resp.finish())
+            future::ok(resp.finish())
         } else {
             let reader = ChunkedReadFile {
                 offset,
                 size: length,
-                cpu_pool: self.cpu_pool.unwrap_or_else(|| req.cpu_pool().clone()),
+                cpu_pool: self.cpu_pool.unwrap_or_else(|| DEFAULT_CPUPOOL.lock().clone()),
                 file: Some(self.file),
                 fut: None,
                 counter: 0,
             };
             if offset != 0 || length != self.md.len() {
-                return Ok(resp.status(StatusCode::PARTIAL_CONTENT).streaming(reader));
+                return future::ok(resp.status(StatusCode::PARTIAL_CONTENT).streaming(reader));
             };
-            Ok(resp.streaming(reader))
+            future::ok(resp.streaming(reader))
         }
     }
 }
@@ -721,7 +722,7 @@ pub struct StaticFiles<S, C = DefaultConfig> {
     index: Option<String>,
     show_index: bool,
     cpu_pool: CpuPool,
-    default: Box<RouteHandler<S>>,
+    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
     renderer: Box<DirectoryRenderer<S>>,
     _chunk_size: usize,
     _follow_symlinks: bool,
@@ -780,9 +781,7 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
             index: None,
             show_index: false,
             cpu_pool: pool,
-            default: Box::new(WrapHandler::new(|_: &_| {
-                Response::new(StatusCode::NOT_FOUND)
-            })),
+            default: Rc::new(RefCell::new(None)),
             renderer: Box::new(directory_listing),
             _chunk_size: 0,
             _follow_symlinks: false,
@@ -818,11 +817,21 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
         self
     }
 
-    /// Sets default handler which is used when no matched file could be found.
-    pub fn default_handler<H: Handler<S>>(mut self, handler: H) -> StaticFiles<S, C> {
-        self.default = Box::new(WrapHandler::new(handler));
-        self
-    }
+    /// Default resource to be used if no matching file could be found.
+    // pub fn default_resource<F, R, U>(mut self, f: F) -> Resource<S, T>
+    // where
+    //     F: FnOnce(Resource<S>) -> R,
+    //     R: IntoNewService<U>,
+    //     U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
+    //         + 'static,
+    // {
+    //     // create and configure default resource
+    //     self.default = Rc::new(RefCell::new(Some(Rc::new(Box::new(
+    //         DefaultNewService::new(f(Resource::new()).into_new_service()),
+    //     )))));
+
+    //     self
+    // }
 }
 
 impl<F, S, C> IntoNewService<F> for StaticFiles<S, C>
@@ -836,21 +845,16 @@ impl<F, S, C> IntoNewService<F> for StaticFiles<S, C>
             InitError = (),
         > + 'static,
 {
-        fn into_new_service(self) -> impl NewService<
-            Request = ServiceRequest<S>,
-            Response = Response,
-            Error = (),
-            InitError = (),
-        > {
+        fn into_new_service(self) -> F {
            StaticFilesService { sf: Box::new(self)}
         }
 }
 
-struct StaticFilesService {
-    sf: Box<StaticFiles>
+struct StaticFilesService<S> {
+    sf: Box<StaticFiles<S>>
 }
 
-impl<S> Service<S> for StaticFilesService {
+impl<S, C> Service for StaticFilesService<S> {
     type Request = HttpRequest<S>;
     type Response = Response;
     type Error = StaticFileError;
@@ -888,6 +892,25 @@ impl<S> Service<S> for StaticFilesService {
                 .respond_to(&req)
         }
     }
+}
+
+/// Env variable for default cpu pool size
+const ENV_CPU_POOL_VAR: &str = "ACTIX_CPU_POOL";
+lazy_static! {
+    static ref DEFAULT_CPUPOOL: Mutex<CpuPool> = {
+        let default = match env::var(ENV_CPU_POOL_VAR) {
+            Ok(val) => {
+                if let Ok(val) = val.parse() {
+                    val
+                } else {
+                    error!("Can not parse ACTIX_CPU_POOL value");
+                    20
+                }
+            }
+            Err(_) => 20,
+        };
+        Mutex::new(CpuPool::new(default))
+    };
 }
 
 /// Errors which can occur when serving static files.
@@ -948,7 +971,7 @@ impl HttpRange {
                 if start_str.is_empty() {
                     // If no start is specified, end specifies the
                     // range start relative to the end of the file.
-                    let mut length: i64 = try!(end_str.parse().map_err(|_| ()));
+                    let mut length: i64 = end_str.parse().map_err(|_| ())?;
 
                     if length > size_sig {
                         length = size_sig;
