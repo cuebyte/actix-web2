@@ -30,6 +30,7 @@ use futures::future::{err, ok, Either, FutureResult};
 use actix_http::error::{
     Error, ErrorBadRequest, ErrorNotFound, JsonPayloadError, UrlencodedError,
 };
+use actix_service::{IntoNewService, NewService, Service};
 use actix_http::http::{ContentEncoding, Method, StatusCode};
 use actix_http::http::header::{self, ContentDisposition, DispositionParam, DispositionType};
 use actix_http::error::{ResponseError};
@@ -38,6 +39,7 @@ use actix_router::PathDeserializer;
 
 use crate::request::HttpRequest;
 use crate::responder::Responder;
+use crate::service::ServiceRequest;
 
 // use header;
 // use header::{ContentDisposition, DispositionParam, DispositionType};
@@ -823,34 +825,65 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
     }
 }
 
-impl<S: 'static, C: 'static + StaticFileConfig> Responder<S> for StaticFiles<S, C> {
-    type Future = FutureResult<Response, Error>;
-    type Error = StaticFileError;
+impl<F, S, C> IntoNewService<F> for StaticFiles<S, C>
+    where
+        S: 'static,
+        C: 'static + StaticFileConfig,
+        F: NewService<
+            Request = ServiceRequest<S>,
+            Response = Response,
+            Error = (),
+            InitError = (),
+        > + 'static,
+{
+        fn into_new_service(self) -> impl NewService<
+            Request = ServiceRequest<S>,
+            Response = Response,
+            Error = (),
+            InitError = (),
+        > {
+           StaticFilesService { sf: Box::new(self)}
+        }
+}
 
-    fn respond_to(self, req: &HttpRequest<S>) -> Self::Future {
+struct StaticFilesService {
+    sf: Box<StaticFiles>
+}
+
+impl<S> Service<S> for StaticFilesService {
+    type Request = HttpRequest<S>;
+    type Response = Response;
+    type Error = StaticFileError;
+    type Future = FutureResult<Response, StaticFileError>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+    
+    fn call(&mut self, req: Self::Request) -> Self::Future {
         let tail: String = req.match_info().get_decoded("tail").unwrap_or_else(|| "".to_string());
         let relpath = PathBuf::from_param(tail.trim_left_matches('/'))?;
 
         // full filepath
-        let path = self.directory.join(&relpath).canonicalize()?;
+        let path = self.sf.directory.join(&relpath).canonicalize()?;
 
         if path.is_dir() {
-            if let Some(ref redir_index) = self.index {
+            if let Some(ref redir_index) = self.sf.index {
                 let path = path.join(redir_index);
 
                 NamedFile::open_with_config(path, C::default())?
                     .set_cpu_pool(self.cpu_pool.clone())
                     .respond_to(&req)?
                     .respond_to(&req)
-            } else if self.show_index {
-                let dir = Directory::new(self.directory.clone(), path);
+            } else if self.sf.show_index {
+                let dir = Directory::new(self.sf.directory.clone(), path);
                 Ok((*self.renderer)(&dir, &req)?.into())
             } else {
                 Err(StaticFileError::IsDirectory.into())
             }
         } else {
             NamedFile::open_with_config(path, C::default())?
-                .set_cpu_pool(self.cpu_pool.clone())
+                .set_cpu_pool(self.sf.cpu_pool.clone())
                 .respond_to(&req)?
                 .respond_to(&req)
         }
