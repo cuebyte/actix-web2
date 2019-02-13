@@ -1,12 +1,12 @@
 use std::ops::Deref;
 use std::rc::Rc;
 
-use actix_http::Error;
-use futures::future::{ok, FutureResult};
+use actix_http::error::{Error, ErrorInternalServerError};
+use futures::future::{err, ok, FutureResult};
 use futures::{Future, IntoFuture};
 
 use crate::handler::FromRequest;
-use crate::request::HttpRequest;
+use crate::service::ServiceRequest;
 
 /// Application state
 pub struct State<S>(Rc<S>);
@@ -35,13 +35,19 @@ impl<S> Clone for State<S> {
     }
 }
 
-impl<S> FromRequest<S> for State<S> {
+impl<S: 'static, P> FromRequest<P> for State<S> {
     type Error = Error;
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
-        ok(req.get_state())
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
+        if let Some(st) = req.app_extensions().get::<State<S>>() {
+            ok(st.clone())
+        } else {
+            err(ErrorInternalServerError(
+                "State is not configured, use App::add_state()",
+            ))
+        }
     }
 }
 
