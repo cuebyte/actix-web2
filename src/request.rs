@@ -1,53 +1,39 @@
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Ref, RefMut};
 use std::fmt;
 use std::ops::Deref;
 use std::rc::Rc;
 
 use actix_http::http::{HeaderMap, Method, Uri, Version};
-use actix_http::payload::Payload;
-use actix_http::{
-    Error, Extensions, HttpMessage, Message, Request as BaseRequest, RequestHead,
-};
+use actix_http::{Error, Extensions, HttpMessage, Message, Payload, RequestHead};
 use actix_router::{Path, Url};
 use futures::future::{ok, FutureResult};
 
 use crate::handler::FromRequest;
-use crate::state::State;
+use crate::service::ServiceRequest;
 
-pub struct HttpRequest<S = ()> {
+#[derive(Clone)]
+pub struct HttpRequest {
     head: Message<RequestHead>,
-    path: Path<Url>,
-    state: State<S>,
-    payload: Option<Rc<RefCell<Option<Payload>>>>,
+    pub(crate) path: Path<Url>,
+    extensions: Rc<Extensions>,
 }
 
-impl<S> HttpRequest<S> {
+impl HttpRequest {
     #[inline]
     pub fn new(
-        state: State<S>,
+        head: Message<RequestHead>,
         path: Path<Url>,
-        request: BaseRequest,
-    ) -> HttpRequest<S> {
-        let (head, payload) = request.into_parts();
+        extensions: Rc<Extensions>,
+    ) -> HttpRequest {
         HttpRequest {
             head,
             path,
-            state,
-            payload: payload.map(|p| Rc::new(RefCell::new(Some(p)))),
+            extensions,
         }
     }
+}
 
-    #[inline]
-    /// Shared application state
-    pub fn state(&self) -> &S {
-        &self.state
-    }
-
-    /// Returns shared application state
-    pub fn get_state(&self) -> State<S> {
-        self.state.clone()
-    }
-
+impl HttpRequest {
     /// This method returns reference to the request head
     #[inline]
     pub fn head(&self) -> &RequestHead {
@@ -119,6 +105,12 @@ impl<S> HttpRequest<S> {
         self.head.extensions_mut()
     }
 
+    /// Application extensions
+    #[inline]
+    pub fn app_extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+
     // /// Get *ConnectionInfo* for the correct request.
     // #[inline]
     // pub fn connection_info(&self) -> Ref<ConnectionInfo> {
@@ -126,18 +118,7 @@ impl<S> HttpRequest<S> {
     // }
 }
 
-impl<S> Clone for HttpRequest<S> {
-    fn clone(&self) -> HttpRequest<S> {
-        HttpRequest {
-            head: self.head.clone(),
-            path: self.path.clone(),
-            state: self.state.clone(),
-            payload: self.payload.clone(),
-        }
-    }
-}
-
-impl<S> Deref for HttpRequest<S> {
+impl Deref for HttpRequest {
     type Target = RequestHead;
 
     fn deref(&self) -> &RequestHead {
@@ -145,39 +126,35 @@ impl<S> Deref for HttpRequest<S> {
     }
 }
 
-impl<S> HttpMessage for HttpRequest<S> {
-    type Stream = Payload;
+impl HttpMessage for HttpRequest {
+    type Stream = ();
 
     #[inline]
     fn headers(&self) -> &HeaderMap {
-        &self.head.headers
+        self.headers()
     }
 
     #[inline]
-    fn payload(&self) -> Option<Payload> {
-        if let Some(ref pl) = self.payload {
-            pl.as_ref().borrow_mut().take()
-        } else {
-            None
-        }
+    fn take_payload(&mut self) -> Payload<Self::Stream> {
+        Payload::None
     }
 }
 
-impl<S> FromRequest<S> for HttpRequest<S> {
+impl<P> FromRequest<P> for HttpRequest {
     type Error = Error;
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         ok(req.clone())
     }
 }
 
-impl<S> fmt::Debug for HttpRequest<S> {
+impl fmt::Debug for HttpRequest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(
             f,
-            "\nRequest {:?} {}:{}",
+            "\nHttpRequest {:?} {}:{}",
             self.head.version,
             self.head.method,
             self.path()

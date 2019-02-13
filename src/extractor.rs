@@ -6,7 +6,7 @@ use bytes::Bytes;
 use encoding::all::UTF_8;
 use encoding::types::{DecoderTrap, Encoding};
 use futures::future::{err, ok, Either, FutureResult};
-use futures::{future, Async, Future, IntoFuture, Poll};
+use futures::{future, Async, Future, IntoFuture, Poll, Stream};
 use mime::Mime;
 use serde::de::{self, DeserializeOwned};
 use serde::Serialize;
@@ -15,7 +15,8 @@ use serde_urlencoded;
 
 use actix_http::dev::{JsonBody, MessageBody, UrlEncoded};
 use actix_http::error::{
-    Error, ErrorBadRequest, ErrorNotFound, JsonPayloadError, UrlencodedError,
+    Error, ErrorBadRequest, ErrorNotFound, JsonPayloadError, PayloadError,
+    UrlencodedError,
 };
 use actix_http::http::StatusCode;
 use actix_http::{HttpMessage, Response};
@@ -24,6 +25,7 @@ use actix_router::PathDeserializer;
 use crate::handler::FromRequest;
 use crate::request::HttpRequest;
 use crate::responder::Responder;
+use crate::service::ServiceRequest;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.
@@ -109,7 +111,7 @@ impl<T> Path<T> {
     }
 
     /// Extract path information from a request
-    pub fn extract<S>(req: &HttpRequest<S>) -> Result<Path<T>, de::value::Error>
+    pub fn extract<P>(req: &ServiceRequest<P>) -> Result<Path<T>, de::value::Error>
     where
         T: DeserializeOwned,
     {
@@ -124,7 +126,7 @@ impl<T> From<T> for Path<T> {
     }
 }
 
-impl<T, S> FromRequest<S> for Path<T>
+impl<T, P> FromRequest<P> for Path<T>
 where
     T: DeserializeOwned,
 {
@@ -132,7 +134,7 @@ where
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         Self::extract(req).map_err(ErrorNotFound).into_future()
     }
 }
@@ -210,7 +212,7 @@ impl<T> Query<T> {
     }
 }
 
-impl<T, S> FromRequest<S> for Query<T>
+impl<T, P> FromRequest<P> for Query<T>
 where
     T: de::DeserializeOwned,
 {
@@ -218,7 +220,7 @@ where
     type Future = FutureResult<Self, Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         serde_urlencoded::from_str::<T>(req.query_string())
             .map(|val| ok(Query(val)))
             .unwrap_or_else(|e| err(e.into()))
@@ -289,16 +291,16 @@ impl<T> DerefMut for Form<T> {
     }
 }
 
-impl<T, S> FromRequest<S> for Form<T>
+impl<T, P> FromRequest<P> for Form<T>
 where
     T: DeserializeOwned + 'static,
-    S: 'static,
+    P: Stream<Item = Bytes, Error = PayloadError> + 'static,
 {
     type Error = Error;
     type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         let cfg = FormConfig::default();
 
         let req2 = req.clone();
@@ -353,12 +355,12 @@ impl<T: fmt::Display> fmt::Display for Form<T> {
 ///     );
 /// }
 /// ```
-pub struct FormConfig<S> {
+pub struct FormConfig {
     limit: usize,
-    ehandler: Rc<Fn(UrlencodedError, &HttpRequest<S>) -> Error>,
+    ehandler: Rc<Fn(UrlencodedError, &HttpRequest) -> Error>,
 }
 
-impl<S> FormConfig<S> {
+impl FormConfig {
     /// Change max size of payload. By default max size is 256Kb
     pub fn limit(&mut self, limit: usize) -> &mut Self {
         self.limit = limit;
@@ -368,14 +370,14 @@ impl<S> FormConfig<S> {
     /// Set custom error handler
     pub fn error_handler<F>(&mut self, f: F) -> &mut Self
     where
-        F: Fn(UrlencodedError, &HttpRequest<S>) -> Error + 'static,
+        F: Fn(UrlencodedError, &HttpRequest) -> Error + 'static,
     {
         self.ehandler = Rc::new(f);
         self
     }
 }
 
-impl<S> Default for FormConfig<S> {
+impl Default for FormConfig {
     fn default() -> Self {
         FormConfig {
             limit: 262_144,
@@ -483,11 +485,11 @@ where
     }
 }
 
-impl<T: Serialize, S> Responder<S> for Json<T> {
+impl<T: Serialize> Responder for Json<T> {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         let body = match serde_json::to_string(&self.0) {
             Ok(body) => body,
             Err(e) => return err(e.into()),
@@ -499,16 +501,16 @@ impl<T: Serialize, S> Responder<S> for Json<T> {
     }
 }
 
-impl<T, S> FromRequest<S> for Json<T>
+impl<T, P> FromRequest<P> for Json<T>
 where
     T: DeserializeOwned + 'static,
-    S: 'static,
+    P: Stream<Item = Bytes, Error = PayloadError> + 'static,
 {
     type Error = Error;
     type Future = Box<Future<Item = Self, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         let cfg = JsonConfig::default();
 
         let req2 = req.clone();
@@ -552,12 +554,12 @@ where
 ///     });
 /// }
 /// ```
-pub struct JsonConfig<S> {
+pub struct JsonConfig {
     limit: usize,
-    ehandler: Rc<Fn(JsonPayloadError, &HttpRequest<S>) -> Error>,
+    ehandler: Rc<Fn(JsonPayloadError, &HttpRequest) -> Error>,
 }
 
-impl<S> JsonConfig<S> {
+impl JsonConfig {
     /// Change max size of payload. By default max size is 256Kb
     pub fn limit(&mut self, limit: usize) -> &mut Self {
         self.limit = limit;
@@ -567,14 +569,14 @@ impl<S> JsonConfig<S> {
     /// Set custom error handler
     pub fn error_handler<F>(&mut self, f: F) -> &mut Self
     where
-        F: Fn(JsonPayloadError, &HttpRequest<S>) -> Error + 'static,
+        F: Fn(JsonPayloadError, &HttpRequest) -> Error + 'static,
     {
         self.ehandler = Rc::new(f);
         self
     }
 }
 
-impl<S> Default for JsonConfig<S> {
+impl Default for JsonConfig {
     fn default() -> Self {
         JsonConfig {
             limit: 262_144,
@@ -607,13 +609,16 @@ impl<S> Default for JsonConfig<S> {
 ///         .resource("/index.html", |r| r.method(http::Method::GET).with(index));
 /// }
 /// ```
-impl<S: 'static> FromRequest<S> for Bytes {
+impl<P> FromRequest<P> for Bytes
+where
+    P: Stream<Item = Bytes, Error = PayloadError> + 'static,
+{
     type Error = Error;
     type Future =
         Either<Box<Future<Item = Bytes, Error = Error>>, FutureResult<Bytes, Error>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         let cfg = PayloadConfig::default();
 
         if let Err(e) = cfg.check_mimetype(req) {
@@ -651,13 +656,16 @@ impl<S: 'static> FromRequest<S> for Bytes {
 ///     });
 /// }
 /// ```
-impl<S: 'static> FromRequest<S> for String {
+impl<P> FromRequest<P> for String
+where
+    P: Stream<Item = Bytes, Error = PayloadError> + 'static,
+{
     type Error = Error;
     type Future =
         Either<Box<Future<Item = String, Error = Error>>, FutureResult<String, Error>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         let cfg = PayloadConfig::default();
 
         // check content-type
@@ -737,16 +745,16 @@ impl<S: 'static> FromRequest<S> for String {
 ///     });
 /// }
 /// ```
-impl<T: 'static, S> FromRequest<S> for Option<T>
+impl<T: 'static, P> FromRequest<P> for Option<T>
 where
-    T: FromRequest<S>,
+    T: FromRequest<P>,
     T::Future: 'static,
 {
     type Error = Error;
     type Future = Box<Future<Item = Option<T>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         Box::new(T::from_request(req).then(|r| match r {
             Ok(v) => future::ok(Some(v)),
             Err(_) => future::ok(None),
@@ -799,9 +807,9 @@ where
 ///     });
 /// }
 /// ```
-impl<T: 'static, S> FromRequest<S> for Result<T, T::Error>
+impl<T: 'static, P> FromRequest<P> for Result<T, T::Error>
 where
-    T: FromRequest<S>,
+    T: FromRequest<P>,
     T::Future: 'static,
     T::Error: 'static,
 {
@@ -809,7 +817,7 @@ where
     type Future = Box<Future<Item = Result<T, T::Error>, Error = Error>>;
 
     #[inline]
-    fn from_request(req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         Box::new(T::from_request(req).then(|res| match res {
             Ok(v) => ok(Ok(v)),
             Err(e) => ok(Err(e)),
@@ -837,7 +845,7 @@ impl PayloadConfig {
         self
     }
 
-    fn check_mimetype<S>(&self, req: &HttpRequest<S>) -> Result<(), Error> {
+    fn check_mimetype<P>(&self, req: &ServiceRequest<P>) -> Result<(), Error> {
         // check content-type
         if let Some(ref mt) = self.mimetype {
             match req.mime_type() {
@@ -870,12 +878,12 @@ impl Default for PayloadConfig {
 macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
 
     /// FromRequest implementation for tuple
-    impl<S: 'static, $($T: FromRequest<S> + 'static),+> FromRequest<S> for ($($T,)+)
+    impl<P, $($T: FromRequest<P> + 'static),+> FromRequest<P> for ($($T,)+)
     {
         type Error = Error;
-        type Future = $fut_type<S, $($T),+>;
+        type Future = $fut_type<P, $($T),+>;
 
-        fn from_request(req: &HttpRequest<S>) -> Self::Future {
+        fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
             $fut_type {
                 items: <($(Option<$T>,)+)>::default(),
                 futs: ($($T::from_request(req),)+),
@@ -884,12 +892,12 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
     }
 
     #[doc(hidden)]
-    pub struct $fut_type<S, $($T: FromRequest<S>),+> {
+    pub struct $fut_type<P, $($T: FromRequest<P>),+> {
         items: ($(Option<$T>,)+),
         futs: ($($T::Future,)+),
     }
 
-    impl<S, $($T: FromRequest<S>),+> Future for $fut_type<S, $($T),+>
+    impl<P, $($T: FromRequest<P>),+> Future for $fut_type<P, $($T),+>
     {
         type Item = ($($T,)+);
         type Error = Error;
@@ -920,11 +928,11 @@ macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
     }
 });
 
-impl<S> FromRequest<S> for () {
+impl<P> FromRequest<P> for () {
     type Error = Error;
     type Future = FutureResult<(), Error>;
 
-    fn from_request(_req: &HttpRequest<S>) -> Self::Future {
+    fn from_request(_req: &mut ServiceRequest<P>) -> Self::Future {
         ok(())
     }
 }

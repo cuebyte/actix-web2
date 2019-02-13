@@ -8,7 +8,7 @@ use actix_service::{
 use futures::future::{ok, Either, FutureResult};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
-use crate::handler::{AsyncFactory, Factory, FromRequest, HandlerRequest};
+use crate::handler::{AsyncFactory, Factory, FromRequest};
 use crate::helpers::{DefaultNewService, HttpDefaultNewService, HttpDefaultService};
 use crate::responder::Responder;
 use crate::route::{CreateRouteService, Route, RouteBuilder, RouteService};
@@ -18,15 +18,15 @@ use crate::service::ServiceRequest;
 ///
 /// Route uses builder-like pattern for configuration.
 /// If handler is not explicitly set, default *404 Not Found* handler is used.
-pub struct Resource<S, T = ResourceEndpoint<S>> {
-    routes: Vec<Route<S>>,
+pub struct Resource<P, T = ResourceEndpoint<P>> {
+    routes: Vec<Route<P>>,
     endpoint: T,
-    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
-    factory_ref: Rc<RefCell<Option<ResourceFactory<S>>>>,
+    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>,
+    factory_ref: Rc<RefCell<Option<ResourceFactory<P>>>>,
 }
 
-impl<S: 'static> Resource<S> {
-    pub fn new() -> Resource<S> {
+impl<P> Resource<P> {
+    pub fn new() -> Resource<P> {
         let fref = Rc::new(RefCell::new(None));
 
         Resource {
@@ -38,10 +38,10 @@ impl<S: 'static> Resource<S> {
     }
 }
 
-impl<S: 'static, T> Resource<S, T>
+impl<P: 'static, T> Resource<P, T>
 where
     T: NewService<
-        Request = ServiceRequest<S>,
+        Request = ServiceRequest<P>,
         Response = Response,
         Error = (),
         InitError = (),
@@ -66,54 +66,54 @@ where
     ///         .finish();
     /// }
     /// ```
-    pub fn route<F>(mut self, f: F) -> Resource<S, T>
+    pub fn route<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<S>) -> Route<S>,
+        F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
         self.routes.push(f(Route::build()));
         self
     }
 
     /// Register a new `GET` route.
-    pub fn get<F>(mut self, f: F) -> Resource<S, T>
+    pub fn get<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<S>) -> Route<S>,
+        F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
         self.routes.push(f(Route::get()));
         self
     }
 
     /// Register a new `POST` route.
-    pub fn post<F>(mut self, f: F) -> Resource<S, T>
+    pub fn post<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<S>) -> Route<S>,
+        F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
         self.routes.push(f(Route::get()));
         self
     }
 
     /// Register a new `PUT` route.
-    pub fn put<F>(mut self, f: F) -> Resource<S, T>
+    pub fn put<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<S>) -> Route<S>,
+        F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
         self.routes.push(f(Route::get()));
         self
     }
 
     /// Register a new `DELETE` route.
-    pub fn delete<F>(mut self, f: F) -> Resource<S, T>
+    pub fn delete<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<S>) -> Route<S>,
+        F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
         self.routes.push(f(Route::get()));
         self
     }
 
     /// Register a new `HEAD` route.
-    pub fn head<F>(mut self, f: F) -> Resource<S, T>
+    pub fn head<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<S>) -> Route<S>,
+        F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
         self.routes.push(f(Route::get()));
         self
@@ -137,9 +137,9 @@ where
     /// # fn index(req: &HttpRequest) -> HttpResponse { unimplemented!() }
     /// App::new().resource("/", |r| r.route().filter(pred::Get()).f(index));
     /// ```
-    pub fn method<F>(mut self, method: Method, f: F) -> Resource<S, T>
+    pub fn method<F>(mut self, method: Method, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<S>) -> Route<S>,
+        F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
         self.routes.push(f(Route::build().method(method)));
         self
@@ -163,11 +163,11 @@ where
     /// # fn index(req: HttpRequest) -> HttpResponse { unimplemented!() }
     /// App::new().resource("/", |r| r.route().with(index));
     /// ```
-    pub fn to<F, P, R>(mut self, handler: F) -> Resource<S, T>
+    pub fn to<F, I, R>(mut self, handler: F) -> Self
     where
-        F: Factory<S, (), P, R> + 'static,
-        P: FromRequest<S> + 'static,
-        R: Responder<S> + 'static,
+        F: Factory<I, R> + 'static,
+        I: FromRequest<P> + 'static,
+        R: Responder + 'static,
     {
         self.routes.push(Route::build().to(handler));
         self
@@ -201,10 +201,10 @@ where
     /// App::new().resource("/", |r| r.route().with_async(index));
     /// ```
     #[allow(clippy::wrong_self_convention)]
-    pub fn to_async<F, P, R>(mut self, handler: F) -> Resource<S, T>
+    pub fn to_async<F, I, R>(mut self, handler: F) -> Self
     where
-        F: AsyncFactory<S, (), P, R>,
-        P: FromRequest<S> + 'static,
+        F: AsyncFactory<I, R>,
+        I: FromRequest<P> + 'static,
         R: IntoFuture + 'static,
         R::Item: Into<Response>,
         R::Error: Into<Error>,
@@ -221,9 +221,9 @@ where
         self,
         mw: F,
     ) -> Resource<
-        S,
+        P,
         impl NewService<
-            Request = ServiceRequest<S>,
+            Request = ServiceRequest<P>,
             Response = Response,
             Error = (),
             InitError = (),
@@ -232,7 +232,7 @@ where
     where
         M: NewTransform<
             T::Service,
-            Request = ServiceRequest<S>,
+            Request = ServiceRequest<P>,
             Response = Response,
             Error = (),
             InitError = (),
@@ -249,11 +249,11 @@ where
     }
 
     /// Default resource to be used if no matching route could be found.
-    pub fn default_resource<F, R, U>(mut self, f: F) -> Resource<S, T>
+    pub fn default_resource<F, R, U>(mut self, f: F) -> Self
     where
-        F: FnOnce(Resource<S>) -> R,
+        F: FnOnce(Resource<P>) -> R,
         R: IntoNewService<U>,
-        U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
+        U: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>
             + 'static,
     {
         // create and configure default resource
@@ -266,16 +266,16 @@ where
 
     pub(crate) fn get_default(
         &self,
-    ) -> Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>
+    ) -> Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>
     {
         self.default.clone()
     }
 }
 
-impl<S: 'static, T> IntoNewService<T> for Resource<S, T>
+impl<P, T> IntoNewService<T> for Resource<P, T>
 where
     T: NewService<
-        Request = ServiceRequest<S>,
+        Request = ServiceRequest<P>,
         Response = Response,
         Error = (),
         InitError = (),
@@ -291,18 +291,18 @@ where
     }
 }
 
-pub struct ResourceFactory<S> {
-    routes: Vec<Route<S>>,
-    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
+pub struct ResourceFactory<P> {
+    routes: Vec<Route<P>>,
+    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>,
 }
 
-impl<S: 'static> NewService for ResourceFactory<S> {
-    type Request = ServiceRequest<S>;
+impl<P> NewService for ResourceFactory<P> {
+    type Request = ServiceRequest<P>;
     type Response = Response;
     type Error = ();
     type InitError = ();
-    type Service = ResourceService<S>;
-    type Future = CreateResourceService<S>;
+    type Service = ResourceService<P>;
+    type Future = CreateResourceService<P>;
 
     fn new_service(&self) -> Self::Future {
         let default_fut = if let Some(ref default) = *self.default.borrow() {
@@ -323,21 +323,21 @@ impl<S: 'static> NewService for ResourceFactory<S> {
     }
 }
 
-enum CreateRouteServiceItem<S> {
-    Future(CreateRouteService<S>),
-    Service(RouteService<S>),
+enum CreateRouteServiceItem<P> {
+    Future(CreateRouteService<P>),
+    Service(RouteService<P>),
 }
 
-pub struct CreateResourceService<S> {
-    fut: Vec<CreateRouteServiceItem<S>>,
-    default: Option<HttpDefaultService<ServiceRequest<S>, Response>>,
+pub struct CreateResourceService<P> {
+    fut: Vec<CreateRouteServiceItem<P>>,
+    default: Option<HttpDefaultService<ServiceRequest<P>, Response>>,
     default_fut: Option<
-        Box<Future<Item = HttpDefaultService<ServiceRequest<S>, Response>, Error = ()>>,
+        Box<Future<Item = HttpDefaultService<ServiceRequest<P>, Response>, Error = ()>>,
     >,
 }
 
-impl<S: 'static> Future for CreateResourceService<S> {
-    type Item = ResourceService<S>;
+impl<P> Future for CreateResourceService<P> {
+    type Item = ResourceService<P>;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -384,13 +384,13 @@ impl<S: 'static> Future for CreateResourceService<S> {
     }
 }
 
-pub struct ResourceService<S> {
-    routes: Vec<RouteService<S>>,
-    default: Option<HttpDefaultService<ServiceRequest<S>, Response>>,
+pub struct ResourceService<P> {
+    routes: Vec<RouteService<P>>,
+    default: Option<HttpDefaultService<ServiceRequest<P>, Response>>,
 }
 
-impl<S> Service for ResourceService<S> {
-    type Request = ServiceRequest<S>;
+impl<P> Service for ResourceService<P> {
+    type Request = ServiceRequest<P>;
     type Response = Response;
     type Error = ();
     type Future = Either<
@@ -402,11 +402,11 @@ impl<S> Service for ResourceService<S> {
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, mut req: ServiceRequest<S>) -> Self::Future {
+    fn call(&mut self, mut req: ServiceRequest<P>) -> Self::Future {
         for route in self.routes.iter_mut() {
             if route.check(&mut req) {
                 return Either::A(ResourceServiceResponse {
-                    fut: route.call(HandlerRequest::new(req.into_request())),
+                    fut: route.call(req),
                 });
             }
         }
@@ -436,23 +436,23 @@ impl Future for ResourceServiceResponse {
 }
 
 #[doc(hidden)]
-pub struct ResourceEndpoint<S> {
-    factory: Rc<RefCell<Option<ResourceFactory<S>>>>,
+pub struct ResourceEndpoint<P> {
+    factory: Rc<RefCell<Option<ResourceFactory<P>>>>,
 }
 
-impl<S> ResourceEndpoint<S> {
-    fn new(factory: Rc<RefCell<Option<ResourceFactory<S>>>>) -> Self {
+impl<P> ResourceEndpoint<P> {
+    fn new(factory: Rc<RefCell<Option<ResourceFactory<P>>>>) -> Self {
         ResourceEndpoint { factory }
     }
 }
 
-impl<S: 'static> NewService for ResourceEndpoint<S> {
-    type Request = ServiceRequest<S>;
+impl<P> NewService for ResourceEndpoint<P> {
+    type Request = ServiceRequest<P>;
     type Response = Response;
     type Error = ();
     type InitError = ();
-    type Service = ResourceEndpointService<S>;
-    type Future = ResourceEndpointFactory<S>;
+    type Service = ResourceEndpointService<P>;
+    type Future = ResourceEndpointFactory<P>;
 
     fn new_service(&self) -> Self::Future {
         ResourceEndpointFactory {
@@ -462,12 +462,12 @@ impl<S: 'static> NewService for ResourceEndpoint<S> {
 }
 
 #[doc(hidden)]
-pub struct ResourceEndpointFactory<S> {
-    fut: CreateResourceService<S>,
+pub struct ResourceEndpointFactory<P> {
+    fut: CreateResourceService<P>,
 }
 
-impl<S: 'static> Future for ResourceEndpointFactory<S> {
-    type Item = ResourceEndpointService<S>;
+impl<P> Future for ResourceEndpointFactory<P> {
+    type Item = ResourceEndpointService<P>;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -477,12 +477,12 @@ impl<S: 'static> Future for ResourceEndpointFactory<S> {
 }
 
 #[doc(hidden)]
-pub struct ResourceEndpointService<S: 'static> {
-    srv: ResourceService<S>,
+pub struct ResourceEndpointService<P> {
+    srv: ResourceService<P>,
 }
 
-impl<S: 'static> Service for ResourceEndpointService<S> {
-    type Request = ServiceRequest<S>;
+impl<P> Service for ResourceEndpointService<P> {
+    type Request = ServiceRequest<P>;
     type Response = Response;
     type Error = ();
     type Future = Either<
@@ -494,7 +494,7 @@ impl<S: 'static> Service for ResourceEndpointService<S> {
         self.srv.poll_ready()
     }
 
-    fn call(&mut self, req: ServiceRequest<S>) -> Self::Future {
+    fn call(&mut self, req: ServiceRequest<P>) -> Self::Future {
         self.srv.call(req)
     }
 }

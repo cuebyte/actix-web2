@@ -10,7 +10,7 @@ use crate::request::HttpRequest;
 /// Trait implemented by types that generate http responses.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
-pub trait Responder<S = ()> {
+pub trait Responder {
     /// The associated error which can be returned.
     type Error: Into<Error>;
 
@@ -18,27 +18,27 @@ pub trait Responder<S = ()> {
     type Future: Future<Item = Response, Error = Self::Error>;
 
     /// Convert itself to `AsyncResult` or `Error`.
-    fn respond_to(self, req: HttpRequest<S>) -> Self::Future;
+    fn respond_to(self, req: &HttpRequest) -> Self::Future;
 }
 
-impl<S> Responder<S> for Response {
+impl Responder for Response {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
     #[inline]
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(self)
     }
 }
 
-impl<T, S> Responder<S> for Option<T>
+impl<T> Responder for Option<T>
 where
-    T: Responder<S>,
+    T: Responder,
 {
     type Error = T::Error;
     type Future = EitherFuture<T::Future, FutureResult<Response, T::Error>>;
 
-    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, req: &HttpRequest) -> Self::Future {
         match self {
             Some(t) => EitherFuture::A(t.respond_to(req)),
             None => EitherFuture::B(ok(Response::build(StatusCode::NOT_FOUND).finish())),
@@ -46,15 +46,15 @@ where
     }
 }
 
-impl<S, T, E> Responder<S> for Result<T, E>
+impl<T, E> Responder for Result<T, E>
 where
-    T: Responder<S>,
+    T: Responder,
     E: Into<Error>,
 {
     type Error = Error;
     type Future = EitherFuture<ResponseFuture<T::Future>, FutureResult<Response, Error>>;
 
-    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, req: &HttpRequest) -> Self::Future {
         match self {
             Ok(val) => EitherFuture::A(ResponseFuture::new(val.respond_to(req))),
             Err(e) => EitherFuture::B(err(e.into())),
@@ -62,76 +62,76 @@ where
     }
 }
 
-impl<S> Responder<S> for ResponseBuilder {
+impl Responder for ResponseBuilder {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
     #[inline]
-    fn respond_to(mut self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(mut self, _: &HttpRequest) -> Self::Future {
         ok(self.finish())
     }
 }
 
-impl<S> Responder<S> for &'static str {
+impl Responder for &'static str {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self))
     }
 }
 
-impl<S> Responder<S> for &'static [u8] {
+impl Responder for &'static [u8] {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self))
     }
 }
 
-impl<S> Responder<S> for String {
+impl Responder for String {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self))
     }
 }
 
-impl<'a, S> Responder<S> for &'a String {
+impl<'a> Responder for &'a String {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")
             .body(self))
     }
 }
 
-impl<S> Responder<S> for Bytes {
+impl Responder for Bytes {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self))
     }
 }
 
-impl<S> Responder<S> for BytesMut {
+impl Responder for BytesMut {
     type Error = Error;
     type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, _: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, _: &HttpRequest) -> Self::Future {
         ok(Response::build(StatusCode::OK)
             .content_type("application/octet-stream")
             .body(self))
@@ -174,15 +174,15 @@ pub enum Either<A, B> {
     B(B),
 }
 
-impl<A, B, S> Responder<S> for Either<A, B>
+impl<A, B> Responder for Either<A, B>
 where
-    A: Responder<S>,
-    B: Responder<S>,
+    A: Responder,
+    B: Responder,
 {
     type Error = Error;
     type Future = EitherResponder<A::Future, B::Future>;
 
-    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, req: &HttpRequest) -> Self::Future {
         match self {
             Either::A(a) => EitherResponder::A(a.respond_to(req)),
             Either::B(b) => EitherResponder::B(b.respond_to(req)),
@@ -219,20 +219,20 @@ where
     }
 }
 
-impl<I, E, S> Responder<S> for Box<Future<Item = I, Error = E>>
+impl<I, E> Responder for Box<Future<Item = I, Error = E>>
 where
-    S: 'static,
-    I: Responder<S> + 'static,
+    I: Responder + 'static,
     E: Into<Error> + 'static,
 {
     type Error = Error;
     type Future = Box<Future<Item = Response, Error = Error>>;
 
     #[inline]
-    fn respond_to(self, req: HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, req: &HttpRequest) -> Self::Future {
+        let req = req.clone();
         Box::new(
             self.map_err(|e| e.into())
-                .and_then(move |r| ResponseFuture(r.respond_to(req))),
+                .and_then(move |r| ResponseFuture(r.respond_to(&req))),
         )
     }
 }

@@ -1,4 +1,5 @@
 #![allow(clippy::type_complexity, dead_code)]
+#![allow(unused_variables)]
 
 //#[macro_use]
 //extern crate derive_more;
