@@ -370,7 +370,7 @@ impl<C> DerefMut for NamedFile<C> {
 }
 
 /// Returns true if `req` has no `If-Match` header or one which matches `etag`.
-fn any_match<S>(etag: Option<&header::EntityTag>, req: &HttpRequest<S>) -> bool {
+fn any_match(etag: Option<&header::EntityTag>, req: &HttpRequest) -> bool {
     match req.get_header::<header::IfMatch>() {
         None | Some(header::IfMatch::Any) => true,
         Some(header::IfMatch::Items(ref items)) => {
@@ -387,7 +387,7 @@ fn any_match<S>(etag: Option<&header::EntityTag>, req: &HttpRequest<S>) -> bool 
 }
 
 /// Returns true if `req` doesn't have an `If-None-Match` header matching `req`.
-fn none_match<S>(etag: Option<&header::EntityTag>, req: &HttpRequest<S>) -> bool {
+fn none_match(etag: Option<&header::EntityTag>, req: &HttpRequest) -> bool {
     match req.get_header::<header::IfNoneMatch>() {
         Some(header::IfNoneMatch::Any) => false,
         Some(header::IfNoneMatch::Items(ref items)) => {
@@ -404,11 +404,11 @@ fn none_match<S>(etag: Option<&header::EntityTag>, req: &HttpRequest<S>) -> bool
     }
 }
 
-impl<C: StaticFileConfig, S> Responder<S> for NamedFile<C> {
-    type Future = FutureResult<Response, Error>;
+impl<C: StaticFileConfig> Responder for NamedFile<C> {
     type Error = Error;
+    type Future = FutureResult<Response, Error>;
 
-    fn respond_to(self, req: &HttpRequest<S>) -> Self::Future {
+    fn respond_to(self, req: &HttpRequest) -> Self::Future {
         if self.status_code != StatusCode::OK {
             let mut resp = Response::build(self.status_code);
             resp.set(header::ContentType(self.content_type.clone()))
@@ -600,8 +600,7 @@ impl Stream for ChunkedReadFile {
     }
 }
 
-type DirectoryRenderer<S> =
-    Fn(&Directory, &HttpRequest<S>) -> Result<Response, io::Error>;
+type DirectoryRenderer = Fn(&Directory, &HttpRequest) -> Result<Response, io::Error>;
 
 /// A directory; responds with the generated directory listing.
 #[derive(Debug)]
@@ -649,9 +648,9 @@ macro_rules! encode_file_name {
     };
 }
 
-fn directory_listing<S>(
+fn directory_listing(
     dir: &Directory,
-    req: &HttpRequest<S>,
+    req: &HttpRequest,
 ) -> Result<Response, io::Error> {
     let index_of = format!("Index of {}", req.path());
     let mut body = String::new();
@@ -723,7 +722,7 @@ pub struct StaticFiles<S, C = DefaultConfig> {
     show_index: bool,
     cpu_pool: CpuPool,
     default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
-    renderer: Box<DirectoryRenderer<S>>,
+    renderer: Box<DirectoryRenderer>,
     _chunk_size: usize,
     _follow_symlinks: bool,
     _cd_map: PhantomData<C>,
@@ -773,7 +772,7 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
         let dir = dir.into().canonicalize()?;
 
         if !dir.is_dir() {
-            return Err(StaticFileError::IsNotDirectory.into());
+            return Err(StaticFilesError::IsNotDirectory.into());
         }
 
         Ok(StaticFiles {
@@ -800,7 +799,7 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
     /// Set custom directory renderer
     pub fn files_listing_renderer<F>(mut self, f: F) -> Self
     where
-        for<'r, 's> F: Fn(&'r Directory, &'s HttpRequest<S>)
+        for<'r, 's> F: Fn(&'r Directory, &'s HttpRequest)
                 -> Result<Response, io::Error>
             + 'static,
     {
@@ -850,15 +849,15 @@ impl<F, S, C> IntoNewService<F> for StaticFiles<S, C>
         }
 }
 
-struct StaticFilesService<S> {
-    sf: Box<StaticFiles<S>>
+struct StaticFilesService<S, C = DefaultConfig> {
+    sf: Box<StaticFiles<S, C>>
 }
 
-impl<S, C> Service for StaticFilesService<S> {
-    type Request = HttpRequest<S>;
+impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
+    type Request = HttpRequest;
     type Response = Response;
-    type Error = StaticFileError;
-    type Future = FutureResult<Response, StaticFileError>;
+    type Error = Error;
+    type Future = FutureResult<Response, Error>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
@@ -866,30 +865,51 @@ impl<S, C> Service for StaticFilesService<S> {
     
     fn call(&mut self, req: Self::Request) -> Self::Future {
         let tail: String = req.match_info().get_decoded("tail").unwrap_or_else(|| "".to_string());
-        let relpath = PathBuf::from_param(tail.trim_left_matches('/'))?;
+        let relpath = match PathBuf::from_param(tail.trim_left_matches('/')) {
+            Ok(relpath) => relpath,
+            Err(e) => return future::err(Error::from(e)),
+        };
 
         // full filepath
-        let path = self.sf.directory.join(&relpath).canonicalize()?;
+        let path = match self.sf.directory.join(&relpath).canonicalize() {
+            Ok(path) => path,
+            Err(e) => return future::err(Error::from(e)),
+        };
 
         if path.is_dir() {
             if let Some(ref redir_index) = self.sf.index {
                 let path = path.join(redir_index);
 
-                NamedFile::open_with_config(path, C::default())?
-                    .set_cpu_pool(self.cpu_pool.clone())
-                    .respond_to(&req)?
-                    .respond_to(&req)
+                match NamedFile::open_with_config(path, C::default()) {
+                    Ok(named_file) => match named_file
+                        .set_cpu_pool(self.sf.cpu_pool.clone())
+                        .respond_to(&req).poll() {
+                            Ok(Async::Ready(item)) => future::ok(item),
+                            Ok(Async::NotReady) => unreachable!(),
+                            Err(e) => future::err(Error::from(e)),
+                        },
+                    Err(e) => future::err(Error::from(e)),
+                }
             } else if self.sf.show_index {
                 let dir = Directory::new(self.sf.directory.clone(), path);
-                Ok((*self.renderer)(&dir, &req)?.into())
+                match (*self.sf.renderer)(&dir, &req) {
+                    Ok(resp) => future::ok(resp),
+                    Err(e) => future::err(Error::from(e)),
+                }
             } else {
-                Err(StaticFileError::IsDirectory.into())
+                future::err(StaticFilesError::IsDirectory.into())
             }
         } else {
-            NamedFile::open_with_config(path, C::default())?
-                .set_cpu_pool(self.sf.cpu_pool.clone())
-                .respond_to(&req)?
-                .respond_to(&req)
+            match NamedFile::open_with_config(path, C::default()) {
+                Ok(named_file) => match named_file
+                    .set_cpu_pool(self.sf.cpu_pool.clone())
+                    .respond_to(&req).poll() {
+                        Ok(Async::Ready(item)) => future::ok(item),
+                        Ok(Async::NotReady) => unreachable!(),
+                        Err(e) => future::err(Error::from(e)),
+                    },
+                Err(e) => future::err(Error::from(e)),
+            }
         }
     }
 }
@@ -915,7 +935,7 @@ lazy_static! {
 
 /// Errors which can occur when serving static files.
 #[derive(Display, Debug, PartialEq)]
-enum StaticFileError {
+enum StaticFilesError {
     /// Path is not a directory
     #[display(fmt = "Path is not a directory. Unable to serve static files")]
     IsNotDirectory,
@@ -925,10 +945,30 @@ enum StaticFileError {
     IsDirectory,
 }
 
-/// Return `NotFound` for `StaticFileError`
-impl ResponseError for StaticFileError {
+/// Return `NotFound` for `StaticFilesError`
+impl ResponseError for StaticFilesError {
     fn error_response(&self) -> Response {
         Response::new(StatusCode::NOT_FOUND)
+    }
+}
+
+#[derive(Display, Debug, PartialEq)]
+pub enum UriSegmentError {
+    /// The segment started with the wrapped invalid character.
+    #[display(fmt = "The segment started with the wrapped invalid character")]
+    BadStart(char),
+    /// The segment contained the wrapped invalid character.
+    #[display(fmt = "The segment contained the wrapped invalid character")]
+    BadChar(char),
+    /// The segment ended with the wrapped invalid character.
+    #[display(fmt = "The segment ended with the wrapped invalid character")]
+    BadEnd(char),
+}
+
+/// Return `BadRequest` for `UriSegmentError`
+impl ResponseError for UriSegmentError {
+    fn error_response(&self) -> Response {
+        Response::new(StatusCode::BAD_REQUEST)
     }
 }
 
