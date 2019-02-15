@@ -2,11 +2,21 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use actix_http::error::{Error, ErrorInternalServerError};
+use actix_http::Extensions;
 use futures::future::{err, ok, FutureResult};
-use futures::{Future, IntoFuture};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use crate::handler::FromRequest;
 use crate::service::ServiceRequest;
+
+/// Application state factory
+pub(crate) trait StateFactory {
+    fn construct(&self) -> Box<StateFactoryResult>;
+}
+
+pub(crate) trait StateFactoryResult {
+    fn poll_result(&mut self, extensions: &mut Extensions) -> Poll<(), ()>;
+}
 
 /// Application state
 pub struct State<S>(Rc<S>);
@@ -45,26 +55,66 @@ impl<S: 'static, P> FromRequest<P> for State<S> {
             ok(st.clone())
         } else {
             err(ErrorInternalServerError(
-                "State is not configured, use App::add_state()",
+                "State is not configured, use App::state()",
             ))
         }
     }
 }
 
-/// Application state factory
-pub trait StateFactory<S> {
-    fn construct(&self) -> Box<Future<Item = S, Error = ()>>;
+impl<S: 'static> StateFactory for State<S> {
+    fn construct(&self) -> Box<StateFactoryResult> {
+        Box::new(StateFut { st: self.clone() })
+    }
 }
 
-impl<F, Out> StateFactory<Out::Item> for F
+struct StateFut<S> {
+    st: State<S>,
+}
+
+impl<S: 'static> StateFactoryResult for StateFut<S> {
+    fn poll_result(&mut self, extensions: &mut Extensions) -> Poll<(), ()> {
+        extensions.insert(self.st.clone());
+        Ok(Async::Ready(()))
+    }
+}
+
+impl<F, Out> StateFactory for F
 where
     F: Fn() -> Out + 'static,
     Out: IntoFuture + 'static,
     Out::Error: std::fmt::Debug,
 {
-    fn construct(&self) -> Box<Future<Item = Out::Item, Error = ()>> {
-        Box::new((*self)().into_future().map_err(|e| {
-            log::error!("Can not construct application state: {:?}", e);
-        }))
+    fn construct(&self) -> Box<StateFactoryResult> {
+        Box::new(StateFactoryFut {
+            fut: (*self)().into_future(),
+        })
+    }
+}
+
+struct StateFactoryFut<S, F>
+where
+    F: Future<Item = S>,
+    F::Error: std::fmt::Debug,
+{
+    fut: F,
+}
+
+impl<S: 'static, F> StateFactoryResult for StateFactoryFut<S, F>
+where
+    F: Future<Item = S>,
+    F::Error: std::fmt::Debug,
+{
+    fn poll_result(&mut self, extensions: &mut Extensions) -> Poll<(), ()> {
+        match self.fut.poll() {
+            Ok(Async::Ready(s)) => {
+                extensions.insert(State::new(s));
+                Ok(Async::Ready(()))
+            }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => {
+                log::error!("Can not construct application state: {:?}", e);
+                Err(())
+            }
+        }
     }
 }
