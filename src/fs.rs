@@ -1,45 +1,45 @@
 //! Static files support
+use std::cell::RefCell;
 use std::fmt::Write;
 use std::fs::{DirEntry, File, Metadata};
 use std::io::{Read, Seek};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{env, cmp, io};
-use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{cmp, env, io};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-use log::{error};
-use v_htmlescape::escape as escape_html_entity;
 use bytes::Bytes;
+use derive_more::Display;
 use futures::{Async, Future, Poll, Stream};
 use futures_cpupool::{CpuFuture, CpuPool};
+use log::error;
 use mime;
 use mime_guess::{get_mime_type, guess_mime_type};
-use percent_encoding::{utf8_percent_encode, DEFAULT_ENCODE_SET};
-use derive_more::{Display};
 use parking_lot::Mutex;
+use percent_encoding::{utf8_percent_encode, DEFAULT_ENCODE_SET};
+use v_htmlescape::escape as escape_html_entity;
 
-use futures::future::{ok, err, FutureResult};
-use actix_http::error::{
-    Error,
+use actix_http::error::Error;
+use actix_http::error::ResponseError;
+use actix_http::http::header::{
+    self, ContentDisposition, DispositionParam, DispositionType,
 };
-use actix_service::{IntoNewService, NewService, Service};
 use actix_http::http::{ContentEncoding, Method, StatusCode};
-use actix_http::http::header::{self, ContentDisposition, DispositionParam, DispositionType};
-use actix_http::error::{ResponseError};
 use actix_http::{HttpMessage, Response};
 use actix_router::PathDeserializer;
+use actix_service::{IntoNewService, NewService, Service};
+use futures::future::{err, ok, FutureResult};
 
+use crate::handler::FromRequest;
+use crate::helpers::HttpDefaultNewService;
 use crate::request::HttpRequest;
 use crate::responder::Responder;
 use crate::service::ServiceRequest;
-use crate::handler::FromRequest;
-use crate::helpers::{HttpDefaultNewService};
 
 // use header;
 // use header::{ContentDisposition, DispositionParam, DispositionType};
@@ -201,7 +201,11 @@ impl<C: StaticFileConfig> NamedFile<C> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn from_file_with_config<P: AsRef<Path>>(file: File, path: P, _: C) -> io::Result<NamedFile<C>> {
+    pub fn from_file_with_config<P: AsRef<Path>>(
+        file: File,
+        path: P,
+        _: C,
+    ) -> io::Result<NamedFile<C>> {
         let path = path.as_ref().to_path_buf();
 
         // Get the name of the file and use it to construct default Content-Type
@@ -213,7 +217,7 @@ impl<C: StaticFileConfig> NamedFile<C> {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "Provided path has no filename",
-                    ))
+                    ));
                 }
             };
 
@@ -253,7 +257,10 @@ impl<C: StaticFileConfig> NamedFile<C> {
     ///
     /// let file = NamedFile::open_with_config("foo.txt", DefaultConfig);
     /// ```
-    pub fn open_with_config<P: AsRef<Path>>(path: P, config: C) -> io::Result<NamedFile<C>> {
+    pub fn open_with_config<P: AsRef<Path>>(
+        path: P,
+        config: C,
+    ) -> io::Result<NamedFile<C>> {
         Self::from_file_with_config(File::open(&path)?, path, config)
     }
 
@@ -423,7 +430,8 @@ impl<C: StaticFileConfig> Responder for NamedFile<C> {
             let reader = ChunkedReadFile {
                 size: self.md.len(),
                 offset: 0,
-                cpu_pool: self.cpu_pool
+                cpu_pool: self
+                    .cpu_pool
                     .unwrap_or_else(|| DEFAULT_CPUPOOL.lock().clone()),
                 file: Some(self.file),
                 fut: None,
@@ -483,7 +491,8 @@ impl<C: StaticFileConfig> Responder for NamedFile<C> {
 
         resp.if_some(last_modified, |lm, resp| {
             resp.set(header::LastModified(lm));
-        }).if_some(etag, |etag, resp| {
+        })
+        .if_some(etag, |etag, resp| {
             resp.set(header::ETag(etag));
         });
 
@@ -532,7 +541,9 @@ impl<C: StaticFileConfig> Responder for NamedFile<C> {
             let reader = ChunkedReadFile {
                 offset,
                 size: length,
-                cpu_pool: self.cpu_pool.unwrap_or_else(|| DEFAULT_CPUPOOL.lock().clone()),
+                cpu_pool: self
+                    .cpu_pool
+                    .unwrap_or_else(|| DEFAULT_CPUPOOL.lock().clone()),
                 file: Some(self.file),
                 fut: None,
                 counter: 0,
@@ -648,10 +659,7 @@ macro_rules! encode_file_name {
     };
 }
 
-fn directory_listing(
-    dir: &Directory,
-    req: &HttpRequest,
-) -> Result<Response, io::Error> {
+fn directory_listing(dir: &Directory, req: &HttpRequest) -> Result<Response, io::Error> {
     let index_of = format!("Index of {}", req.path());
     let mut body = String::new();
     let base = Path::new(req.path());
@@ -722,7 +730,7 @@ pub struct StaticFiles<S, C = DefaultConfig> {
     show_index: bool,
     cpu_pool: CpuPool,
     default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
-    renderer: Box<DirectoryRenderer>,
+    renderer: Rc<DirectoryRenderer>,
     _chunk_size: usize,
     _follow_symlinks: bool,
     _cd_map: PhantomData<C>,
@@ -781,7 +789,7 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
             show_index: false,
             cpu_pool: pool,
             default: Rc::new(RefCell::new(None)),
-            renderer: Box::new(directory_listing),
+            renderer: Rc::new(directory_listing),
             _chunk_size: 0,
             _follow_symlinks: false,
             _cd_map: PhantomData,
@@ -799,11 +807,10 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
     /// Set custom directory renderer
     pub fn files_listing_renderer<F>(mut self, f: F) -> Self
     where
-        for<'r, 's> F: Fn(&'r Directory, &'s HttpRequest)
-                -> Result<Response, io::Error>
-            + 'static,
+        for<'r, 's> F:
+            Fn(&'r Directory, &'s HttpRequest) -> Result<Response, io::Error> + 'static,
     {
-        self.renderer = Box::new(f);
+        self.renderer = Rc::new(f);
         self
     }
 
@@ -815,42 +822,41 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
         self.index = Some(index.into());
         self
     }
-
-    /// Default resource to be used if no matching file could be found.
-    // pub fn default_resource<F, R, U>(mut self, f: F) -> Resource<S, T>
-    // where
-    //     F: FnOnce(Resource<S>) -> R,
-    //     R: IntoNewService<U>,
-    //     U: NewService<Request = ServiceRequest<S>, Response = Response, Error = ()>
-    //         + 'static,
-    // {
-    //     // create and configure default resource
-    //     self.default = Rc::new(RefCell::new(Some(Rc::new(Box::new(
-    //         DefaultNewService::new(f(Resource::new()).into_new_service()),
-    //     )))));
-
-    //     self
-    // }
 }
 
-impl<F, S, C> IntoNewService<F> for StaticFiles<S, C>
-    where
-        S: 'static,
-        C: 'static + StaticFileConfig,
-        F: NewService<
-            Request = ServiceRequest<S>,
-            Response = Response,
-            Error = (),
-            InitError = (),
-        > + 'static,
-{
-        fn into_new_service(self) -> F {
-           StaticFilesService { sf: Box::new(self)}
-        }
+impl<S: 'static, C: StaticFileConfig + 'static> NewService for StaticFiles<S, C> {
+    type Request = ServiceRequest<S>;
+    type Response = Response;
+    type Error = Error;
+    type Service = StaticFilesService<S, C>;
+    type InitError = Error;
+    type Future = FutureResult<Self::Service, Self::InitError>;
+
+    fn new_service(&self) -> Self::Future {
+        ok(StaticFilesService {
+            directory: self.directory.clone(),
+            index: self.index.clone(),
+            show_index: self.show_index,
+            cpu_pool: self.cpu_pool.clone(),
+            default: self.default.clone(),
+            renderer: self.renderer.clone(),
+            _chunk_size: self._chunk_size,
+            _follow_symlinks: self._follow_symlinks,
+            _cd_map: self._cd_map,
+        })
+    }
 }
 
-struct StaticFilesService<S, C = DefaultConfig> {
-    sf: Box<StaticFiles<S, C>>
+pub struct StaticFilesService<S, C = DefaultConfig> {
+    directory: PathBuf,
+    index: Option<String>,
+    show_index: bool,
+    cpu_pool: CpuPool,
+    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
+    renderer: Rc<DirectoryRenderer>,
+    _chunk_size: usize,
+    _follow_symlinks: bool,
+    _cd_map: PhantomData<C>,
 }
 
 impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
@@ -862,36 +868,39 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
-    
+
     fn call(&mut self, req: Self::Request) -> Self::Future {
+        let mut req = req;
         let real_path = match PathBuf::from_request(&mut req).poll() {
             Ok(Async::Ready(item)) => item,
             Ok(Async::NotReady) => unreachable!(),
             Err(e) => return err(Error::from(e)),
         };
         // full filepath
-        let path = match self.sf.directory.join(&real_path).canonicalize() {
+        let path = match self.directory.join(&real_path).canonicalize() {
             Ok(path) => path,
             Err(e) => return err(Error::from(e)),
         };
 
         if path.is_dir() {
-            if let Some(ref redir_index) = self.sf.index {
+            if let Some(ref redir_index) = self.index {
                 let path = path.join(redir_index);
 
                 match NamedFile::open_with_config(path, C::default()) {
                     Ok(named_file) => match named_file
-                        .set_cpu_pool(self.sf.cpu_pool.clone())
-                        .respond_to(&req).poll() {
-                            Ok(Async::Ready(item)) => ok(item),
-                            Ok(Async::NotReady) => unreachable!(),
-                            Err(e) => err(Error::from(e)),
-                        },
+                        .set_cpu_pool(self.cpu_pool.clone())
+                        .respond_to(&req)
+                        .poll()
+                    {
+                        Ok(Async::Ready(item)) => ok(item),
+                        Ok(Async::NotReady) => unreachable!(),
+                        Err(e) => err(Error::from(e)),
+                    },
                     Err(e) => err(Error::from(e)),
                 }
-            } else if self.sf.show_index {
-                let dir = Directory::new(self.sf.directory.clone(), path);
-                match (*self.sf.renderer)(&dir, &req) {
+            } else if self.show_index {
+                let dir = Directory::new(self.directory.clone(), path);
+                match (*self.renderer)(&dir, &req) {
                     Ok(resp) => ok(resp),
                     Err(e) => err(Error::from(e)),
                 }
@@ -901,12 +910,14 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
         } else {
             match NamedFile::open_with_config(path, C::default()) {
                 Ok(named_file) => match named_file
-                    .set_cpu_pool(self.sf.cpu_pool.clone())
-                    .respond_to(&req).poll() {
-                        Ok(Async::Ready(item)) => ok(item),
-                        Ok(Async::NotReady) => unreachable!(),
-                        Err(e) => err(Error::from(e)),
-                    },
+                    .set_cpu_pool(self.cpu_pool.clone())
+                    .respond_to(&req)
+                    .poll()
+                {
+                    Ok(Async::Ready(item)) => ok(item),
+                    Ok(Async::NotReady) => unreachable!(),
+                    Err(e) => err(Error::from(e)),
+                },
                 Err(e) => err(Error::from(e)),
             }
         }
@@ -916,7 +927,7 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
 impl<P> FromRequest<P> for PathBuf {
     type Error = UriSegmentError;
     type Future = FutureResult<Self, Self::Error>;
-    
+
     fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
         let path_str = req.match_info().path();
         let mut buf = PathBuf::new();
@@ -1086,7 +1097,8 @@ impl HttpRange {
                         length: length as u64,
                     }))
                 }
-            }).collect::<Result<_, _>>()?;
+            })
+            .collect::<Result<_, _>>()?;
 
         let ranges: Vec<HttpRange> = all_ranges.into_iter().filter_map(|x| x).collect();
 
@@ -1098,985 +1110,985 @@ impl HttpRange {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::fs;
-//     use std::time::Duration;
-//     use std::ops::Add;
-
-//     use super::*;
-//     use application::App;
-//     use body::{Binary, Body};
-//     use http::{header, Method, StatusCode};
-//     use test::{self, TestRequest};
-
-//     #[test]
-//     fn test_file_extension_to_mime() {
-//         let m = file_extension_to_mime("jpg");
-//         assert_eq!(m, mime::IMAGE_JPEG);
-
-//         let m = file_extension_to_mime("invalid extension!!");
-//         assert_eq!(m, mime::APPLICATION_OCTET_STREAM);
-
-//         let m = file_extension_to_mime("");
-//         assert_eq!(m, mime::APPLICATION_OCTET_STREAM);
-//     }
-
-//     #[test]
-//     fn test_if_modified_since_without_if_none_match() {
-//         let mut file = NamedFile::open("Cargo.toml")
-//             .unwrap()
-//             .set_cpu_pool(CpuPool::new(1));
-//         let since = header::HttpDate::from(
-//             SystemTime::now().add(Duration::from_secs(60)));
-
-//         let req = TestRequest::default()
-//             .header(header::IF_MODIFIED_SINCE, since)
-//             .finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.status(),
-//             StatusCode::NOT_MODIFIED
-//         );
-//     }
-
-//     #[test]
-//     fn test_if_modified_since_with_if_none_match() {
-//         let mut file = NamedFile::open("Cargo.toml")
-//             .unwrap()
-//             .set_cpu_pool(CpuPool::new(1));
-//         let since = header::HttpDate::from(
-//             SystemTime::now().add(Duration::from_secs(60)));
-
-//         let req = TestRequest::default()
-//             .header(header::IF_NONE_MATCH, "miss_etag")
-//             .header(header::IF_MODIFIED_SINCE, since)
-//             .finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_ne!(
-//             resp.status(),
-//             StatusCode::NOT_MODIFIED
-//         );
-//     }
-
-//     #[test]
-//     fn test_named_file_text() {
-//         assert!(NamedFile::open("test--").is_err());
-//         let mut file = NamedFile::open("Cargo.toml")
-//             .unwrap()
-//             .set_cpu_pool(CpuPool::new(1));
-//         {
-//             file.file();
-//             let _f: &File = &file;
-//         }
-//         {
-//             let _f: &mut File = &mut file;
-//         }
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "text/x-toml"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "inline; filename=\"Cargo.toml\""
-//         );
-//     }
-
-//     #[test]
-//     fn test_named_file_set_content_type() {
-//         let mut file = NamedFile::open("Cargo.toml")
-//             .unwrap()
-//             .set_content_type(mime::TEXT_XML)
-//             .set_cpu_pool(CpuPool::new(1));
-//         {
-//             file.file();
-//             let _f: &File = &file;
-//         }
-//         {
-//             let _f: &mut File = &mut file;
-//         }
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "text/xml"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "inline; filename=\"Cargo.toml\""
-//         );
-//     }
-
-//     #[test]
-//     fn test_named_file_image() {
-//         let mut file = NamedFile::open("tests/test.png")
-//             .unwrap()
-//             .set_cpu_pool(CpuPool::new(1));
-//         {
-//             file.file();
-//             let _f: &File = &file;
-//         }
-//         {
-//             let _f: &mut File = &mut file;
-//         }
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "image/png"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "inline; filename=\"test.png\""
-//         );
-//     }
-
-//     #[test]
-//     fn test_named_file_image_attachment() {
-//         use header::{ContentDisposition, DispositionParam, DispositionType};
-//         let cd = ContentDisposition {
-//             disposition: DispositionType::Attachment,
-//             parameters: vec![DispositionParam::Filename(String::from("test.png"))],
-//         };
-//         let mut file = NamedFile::open("tests/test.png")
-//             .unwrap()
-//             .set_content_disposition(cd)
-//             .set_cpu_pool(CpuPool::new(1));
-//         {
-//             file.file();
-//             let _f: &File = &file;
-//         }
-//         {
-//             let _f: &mut File = &mut file;
-//         }
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "image/png"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "attachment; filename=\"test.png\""
-//         );
-//     }
-
-//     #[derive(Default)]
-//     pub struct AllAttachmentConfig;
-//     impl StaticFileConfig for AllAttachmentConfig {
-//         fn content_disposition_map(_typ: mime::Name) -> DispositionType {
-//             DispositionType::Attachment
-//         }
-//     }
-
-//     #[derive(Default)]
-//     pub struct AllInlineConfig;
-//     impl StaticFileConfig for AllInlineConfig {
-//         fn content_disposition_map(_typ: mime::Name) -> DispositionType {
-//             DispositionType::Inline
-//         }
-//     }
-
-//     #[test]
-//     fn test_named_file_image_attachment_and_custom_config() {
-//         let file = NamedFile::open_with_config("tests/test.png", AllAttachmentConfig)
-//             .unwrap()
-//             .set_cpu_pool(CpuPool::new(1));
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "image/png"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "attachment; filename=\"test.png\""
-//         );
-
-//         let file = NamedFile::open_with_config("tests/test.png", AllInlineConfig)
-//             .unwrap()
-//             .set_cpu_pool(CpuPool::new(1));
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "image/png"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "inline; filename=\"test.png\""
-//         );
-//     }
-
-//     #[test]
-//     fn test_named_file_binary() {
-//         let mut file = NamedFile::open("tests/test.binary")
-//             .unwrap()
-//             .set_cpu_pool(CpuPool::new(1));
-//         {
-//             file.file();
-//             let _f: &File = &file;
-//         }
-//         {
-//             let _f: &mut File = &mut file;
-//         }
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "application/octet-stream"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "attachment; filename=\"test.binary\""
-//         );
-//     }
-
-//     #[test]
-//     fn test_named_file_status_code_text() {
-//         let mut file = NamedFile::open("Cargo.toml")
-//             .unwrap()
-//             .set_status_code(StatusCode::NOT_FOUND)
-//             .set_cpu_pool(CpuPool::new(1));
-//         {
-//             file.file();
-//             let _f: &File = &file;
-//         }
-//         {
-//             let _f: &mut File = &mut file;
-//         }
-
-//         let req = TestRequest::default().finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "text/x-toml"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "inline; filename=\"Cargo.toml\""
-//         );
-//         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-//     }
-
-//     #[test]
-//     fn test_named_file_ranges_status_code() {
-//         let mut srv = test::TestServer::with_factory(|| {
-//             App::new().handler(
-//                 "test",
-//                 StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
-//             )
-//         });
-
-//         // Valid range header
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/Cargo.toml"))
-//             .header(header::RANGE, "bytes=10-20")
-//             .finish()
-//             .unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
-
-//         // Invalid range header
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/Cargo.toml"))
-//             .header(header::RANGE, "bytes=1-0")
-//             .finish()
-//             .unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-
-//         assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
-//     }
-
-//     #[test]
-//     fn test_named_file_content_range_headers() {
-//         let mut srv = test::TestServer::with_factory(|| {
-//             App::new().handler(
-//                 "test",
-//                 StaticFiles::new(".")
-//                     .unwrap()
-//                     .index_file("tests/test.binary"),
-//             )
-//         });
-
-//         // Valid range header
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/tests/test.binary"))
-//             .header(header::RANGE, "bytes=10-20")
-//             .finish()
-//             .unwrap();
-
-//         let response = srv.execute(request.send()).unwrap();
-
-//         let contentrange = response
-//             .headers()
-//             .get(header::CONTENT_RANGE)
-//             .unwrap()
-//             .to_str()
-//             .unwrap();
-
-//         assert_eq!(contentrange, "bytes 10-20/100");
-
-//         // Invalid range header
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/tests/test.binary"))
-//             .header(header::RANGE, "bytes=10-5")
-//             .finish()
-//             .unwrap();
-
-//         let response = srv.execute(request.send()).unwrap();
-
-//         let contentrange = response
-//             .headers()
-//             .get(header::CONTENT_RANGE)
-//             .unwrap()
-//             .to_str()
-//             .unwrap();
-
-//         assert_eq!(contentrange, "bytes */100");
-//     }
-
-//     #[test]
-//     fn test_named_file_content_length_headers() {
-//         let mut srv = test::TestServer::with_factory(|| {
-//             App::new().handler(
-//                 "test",
-//                 StaticFiles::new(".")
-//                     .unwrap()
-//                     .index_file("tests/test.binary"),
-//             )
-//         });
-
-//         // Valid range header
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/tests/test.binary"))
-//             .header(header::RANGE, "bytes=10-20")
-//             .finish()
-//             .unwrap();
-
-//         let response = srv.execute(request.send()).unwrap();
-
-//         let contentlength = response
-//             .headers()
-//             .get(header::CONTENT_LENGTH)
-//             .unwrap()
-//             .to_str()
-//             .unwrap();
-
-//         assert_eq!(contentlength, "11");
-
-//         // Invalid range header
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/tests/test.binary"))
-//             .header(header::RANGE, "bytes=10-8")
-//             .finish()
-//             .unwrap();
-
-//         let response = srv.execute(request.send()).unwrap();
-
-//         let contentlength = response
-//             .headers()
-//             .get(header::CONTENT_LENGTH)
-//             .unwrap()
-//             .to_str()
-//             .unwrap();
-
-//         assert_eq!(contentlength, "0");
-
-//         // Without range header
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/tests/test.binary"))
-//             .no_default_headers()
-//             .finish()
-//             .unwrap();
-
-//         let response = srv.execute(request.send()).unwrap();
-
-//         let contentlength = response
-//             .headers()
-//             .get(header::CONTENT_LENGTH)
-//             .unwrap()
-//             .to_str()
-//             .unwrap();
-
-//         assert_eq!(contentlength, "100");
-
-//         // chunked
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/t%65st/tests/test.binary"))
-//             .finish()
-//             .unwrap();
-
-//         let response = srv.execute(request.send()).unwrap();
-//         {
-//             let te = response
-//                 .headers()
-//                 .get(header::TRANSFER_ENCODING)
-//                 .unwrap()
-//                 .to_str()
-//                 .unwrap();
-//             assert_eq!(te, "chunked");
-//         }
-//         let bytes = srv.execute(response.body()).unwrap();
-//         let data = Bytes::from(fs::read("tests/test.binary").unwrap());
-//         assert_eq!(bytes, data);
-//     }
-
-//     #[test]
-//     fn test_static_files_with_spaces() {
-//         let mut srv = test::TestServer::with_factory(|| {
-//             App::new().handler(
-//                 "/",
-//                 StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
-//             )
-//         });
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/tests/test%20space.binary"))
-//             .finish()
-//             .unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::OK);
-
-//         let bytes = srv.execute(response.body()).unwrap();
-//         let data = Bytes::from(fs::read("tests/test space.binary").unwrap());
-//         assert_eq!(bytes, data);
-//     }
-
-//     #[derive(Default)]
-//     pub struct OnlyMethodHeadConfig;
-//     impl StaticFileConfig for OnlyMethodHeadConfig {
-//         fn is_method_allowed(method: &Method) -> bool {
-//             match *method {
-//                 Method::HEAD => true,
-//                 _ => false,
-//             }
-//         }
-//     }
-
-//     #[test]
-//     fn test_named_file_not_allowed() {
-//         let file =
-//             NamedFile::open_with_config("Cargo.toml", OnlyMethodHeadConfig).unwrap();
-//         let req = TestRequest::default().method(Method::POST).finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-
-//         let file =
-//             NamedFile::open_with_config("Cargo.toml", OnlyMethodHeadConfig).unwrap();
-//         let req = TestRequest::default().method(Method::PUT).finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-
-//         let file =
-//             NamedFile::open_with_config("Cargo.toml", OnlyMethodHeadConfig).unwrap();
-//         let req = TestRequest::default().method(Method::GET).finish();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-//     }
-
-//     #[test]
-//     fn test_named_file_content_encoding() {
-//         let req = TestRequest::default().method(Method::GET).finish();
-//         let file = NamedFile::open("Cargo.toml").unwrap();
-
-//         assert!(file.encoding.is_none());
-//         let resp = file
-//             .set_content_encoding(ContentEncoding::Identity)
-//             .respond_to(&req)
-//             .unwrap();
-
-//         assert!(resp.content_encoding().is_some());
-//         assert_eq!(resp.content_encoding().unwrap().as_str(), "identity");
-//     }
-
-//     #[test]
-//     fn test_named_file_any_method() {
-//         let req = TestRequest::default().method(Method::POST).finish();
-//         let file = NamedFile::open("Cargo.toml").unwrap();
-//         let resp = file.respond_to(&req).unwrap();
-//         assert_eq!(resp.status(), StatusCode::OK);
-//     }
-
-//     #[test]
-//     fn test_static_files() {
-//         let mut st = StaticFiles::new(".").unwrap().show_files_listing();
-//         let req = TestRequest::with_uri("/missing")
-//             .param("tail", "missing")
-//             .finish();
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-
-//         st.show_index = false;
-//         let req = TestRequest::default().finish();
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-
-//         let req = TestRequest::default().param("tail", "").finish();
-
-//         st.show_index = true;
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "text/html; charset=utf-8"
-//         );
-//         assert!(resp.body().is_binary());
-//         assert!(format!("{:?}", resp.body()).contains("README.md"));
-//     }
-
-//     #[test]
-//     fn test_static_files_bad_directory() {
-//         let st: Result<StaticFiles<()>, Error> = StaticFiles::new("missing");
-//         assert!(st.is_err());
-
-//         let st: Result<StaticFiles<()>, Error> = StaticFiles::new("Cargo.toml");
-//         assert!(st.is_err());
-//     }
-
-//     #[test]
-//     fn test_default_handler_file_missing() {
-//         let st = StaticFiles::new(".")
-//             .unwrap()
-//             .default_handler(|_: &_| "default content");
-//         let req = TestRequest::with_uri("/missing")
-//             .param("tail", "missing")
-//             .finish();
-
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::OK);
-//         assert_eq!(
-//             resp.body(),
-//             &Body::Binary(Binary::Slice(b"default content"))
-//         );
-//     }
-
-//     #[test]
-//     fn test_serve_index() {
-//         let st = StaticFiles::new(".").unwrap().index_file("test.binary");
-//         let req = TestRequest::default().uri("/tests").finish();
-
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::OK);
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).expect("content type"),
-//             "application/octet-stream"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).expect("content disposition"),
-//             "attachment; filename=\"test.binary\""
-//         );
-
-//         let req = TestRequest::default().uri("/tests/").finish();
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::OK);
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "application/octet-stream"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "attachment; filename=\"test.binary\""
-//         );
-
-//         // nonexistent index file
-//         let req = TestRequest::default().uri("/tests/unknown").finish();
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-
-//         let req = TestRequest::default().uri("/tests/unknown/").finish();
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-//     }
-
-//     #[test]
-//     fn test_serve_index_nested() {
-//         let st = StaticFiles::new(".").unwrap().index_file("mod.rs");
-//         let req = TestRequest::default().uri("/src/client").finish();
-//         let resp = st.handle(&req).respond_to(&req).unwrap();
-//         let resp = resp.as_msg();
-//         assert_eq!(resp.status(), StatusCode::OK);
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-//             "text/x-rust"
-//         );
-//         assert_eq!(
-//             resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
-//             "inline; filename=\"mod.rs\""
-//         );
-//     }
-
-//     #[test]
-//     fn integration_serve_index_with_prefix() {
-//         let mut srv = test::TestServer::with_factory(|| {
-//             App::new()
-//                 .prefix("public")
-//                 .handler("/", StaticFiles::new(".").unwrap().index_file("Cargo.toml"))
-//         });
-
-//         let request = srv.get().uri(srv.url("/public")).finish().unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::OK);
-//         let bytes = srv.execute(response.body()).unwrap();
-//         let data = Bytes::from(fs::read("Cargo.toml").unwrap());
-//         assert_eq!(bytes, data);
-
-//         let request = srv.get().uri(srv.url("/public/")).finish().unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::OK);
-//         let bytes = srv.execute(response.body()).unwrap();
-//         let data = Bytes::from(fs::read("Cargo.toml").unwrap());
-//         assert_eq!(bytes, data);
-//     }
-
-//     #[test]
-//     fn integration_serve_index() {
-//         let mut srv = test::TestServer::with_factory(|| {
-//             App::new().handler(
-//                 "test",
-//                 StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
-//             )
-//         });
-
-//         let request = srv.get().uri(srv.url("/test")).finish().unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::OK);
-//         let bytes = srv.execute(response.body()).unwrap();
-//         let data = Bytes::from(fs::read("Cargo.toml").unwrap());
-//         assert_eq!(bytes, data);
-
-//         let request = srv.get().uri(srv.url("/test/")).finish().unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::OK);
-//         let bytes = srv.execute(response.body()).unwrap();
-//         let data = Bytes::from(fs::read("Cargo.toml").unwrap());
-//         assert_eq!(bytes, data);
-
-//         // nonexistent index file
-//         let request = srv.get().uri(srv.url("/test/unknown")).finish().unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-//         let request = srv.get().uri(srv.url("/test/unknown/")).finish().unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-//     }
-
-//     #[test]
-//     fn integration_percent_encoded() {
-//         let mut srv = test::TestServer::with_factory(|| {
-//             App::new().handler(
-//                 "test",
-//                 StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
-//             )
-//         });
-
-//         let request = srv
-//             .get()
-//             .uri(srv.url("/test/%43argo.toml"))
-//             .finish()
-//             .unwrap();
-//         let response = srv.execute(request.send()).unwrap();
-//         assert_eq!(response.status(), StatusCode::OK);
-//     }
-
-//     struct T(&'static str, u64, Vec<HttpRange>);
-
-//     #[test]
-//     fn test_parse() {
-//         let tests = vec![
-//             T("", 0, vec![]),
-//             T("", 1000, vec![]),
-//             T("foo", 0, vec![]),
-//             T("bytes=", 0, vec![]),
-//             T("bytes=7", 10, vec![]),
-//             T("bytes= 7 ", 10, vec![]),
-//             T("bytes=1-", 0, vec![]),
-//             T("bytes=5-4", 10, vec![]),
-//             T("bytes=0-2,5-4", 10, vec![]),
-//             T("bytes=2-5,4-3", 10, vec![]),
-//             T("bytes=--5,4--3", 10, vec![]),
-//             T("bytes=A-", 10, vec![]),
-//             T("bytes=A- ", 10, vec![]),
-//             T("bytes=A-Z", 10, vec![]),
-//             T("bytes= -Z", 10, vec![]),
-//             T("bytes=5-Z", 10, vec![]),
-//             T("bytes=Ran-dom, garbage", 10, vec![]),
-//             T("bytes=0x01-0x02", 10, vec![]),
-//             T("bytes=         ", 10, vec![]),
-//             T("bytes= , , ,   ", 10, vec![]),
-//             T(
-//                 "bytes=0-9",
-//                 10,
-//                 vec![HttpRange {
-//                     start: 0,
-//                     length: 10,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=0-",
-//                 10,
-//                 vec![HttpRange {
-//                     start: 0,
-//                     length: 10,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=5-",
-//                 10,
-//                 vec![HttpRange {
-//                     start: 5,
-//                     length: 5,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=0-20",
-//                 10,
-//                 vec![HttpRange {
-//                     start: 0,
-//                     length: 10,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=15-,0-5",
-//                 10,
-//                 vec![HttpRange {
-//                     start: 0,
-//                     length: 6,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=1-2,5-",
-//                 10,
-//                 vec![
-//                     HttpRange {
-//                         start: 1,
-//                         length: 2,
-//                     },
-//                     HttpRange {
-//                         start: 5,
-//                         length: 5,
-//                     },
-//                 ],
-//             ),
-//             T(
-//                 "bytes=-2 , 7-",
-//                 11,
-//                 vec![
-//                     HttpRange {
-//                         start: 9,
-//                         length: 2,
-//                     },
-//                     HttpRange {
-//                         start: 7,
-//                         length: 4,
-//                     },
-//                 ],
-//             ),
-//             T(
-//                 "bytes=0-0 ,2-2, 7-",
-//                 11,
-//                 vec![
-//                     HttpRange {
-//                         start: 0,
-//                         length: 1,
-//                     },
-//                     HttpRange {
-//                         start: 2,
-//                         length: 1,
-//                     },
-//                     HttpRange {
-//                         start: 7,
-//                         length: 4,
-//                     },
-//                 ],
-//             ),
-//             T(
-//                 "bytes=-5",
-//                 10,
-//                 vec![HttpRange {
-//                     start: 5,
-//                     length: 5,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=-15",
-//                 10,
-//                 vec![HttpRange {
-//                     start: 0,
-//                     length: 10,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=0-499",
-//                 10000,
-//                 vec![HttpRange {
-//                     start: 0,
-//                     length: 500,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=500-999",
-//                 10000,
-//                 vec![HttpRange {
-//                     start: 500,
-//                     length: 500,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=-500",
-//                 10000,
-//                 vec![HttpRange {
-//                     start: 9500,
-//                     length: 500,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=9500-",
-//                 10000,
-//                 vec![HttpRange {
-//                     start: 9500,
-//                     length: 500,
-//                 }],
-//             ),
-//             T(
-//                 "bytes=0-0,-1",
-//                 10000,
-//                 vec![
-//                     HttpRange {
-//                         start: 0,
-//                         length: 1,
-//                     },
-//                     HttpRange {
-//                         start: 9999,
-//                         length: 1,
-//                     },
-//                 ],
-//             ),
-//             T(
-//                 "bytes=500-600,601-999",
-//                 10000,
-//                 vec![
-//                     HttpRange {
-//                         start: 500,
-//                         length: 101,
-//                     },
-//                     HttpRange {
-//                         start: 601,
-//                         length: 399,
-//                     },
-//                 ],
-//             ),
-//             T(
-//                 "bytes=500-700,601-999",
-//                 10000,
-//                 vec![
-//                     HttpRange {
-//                         start: 500,
-//                         length: 201,
-//                     },
-//                     HttpRange {
-//                         start: 601,
-//                         length: 399,
-//                     },
-//                 ],
-//             ),
-//             // Match Apache laxity:
-//             T(
-//                 "bytes=   1 -2   ,  4- 5, 7 - 8 , ,,",
-//                 11,
-//                 vec![
-//                     HttpRange {
-//                         start: 1,
-//                         length: 2,
-//                     },
-//                     HttpRange {
-//                         start: 4,
-//                         length: 2,
-//                     },
-//                     HttpRange {
-//                         start: 7,
-//                         length: 2,
-//                     },
-//                 ],
-//             ),
-//         ];
-
-//         for t in tests {
-//             let header = t.0;
-//             let size = t.1;
-//             let expected = t.2;
-
-//             let res = HttpRange::parse(header, size);
-
-//             if res.is_err() {
-//                 if expected.is_empty() {
-//                     continue;
-//                 } else {
-//                     assert!(
-//                         false,
-//                         "parse({}, {}) returned error {:?}",
-//                         header,
-//                         size,
-//                         res.unwrap_err()
-//                     );
-//                 }
-//             }
-
-//             let got = res.unwrap();
-
-//             if got.len() != expected.len() {
-//                 assert!(
-//                     false,
-//                     "len(parseRange({}, {})) = {}, want {}",
-//                     header,
-//                     size,
-//                     got.len(),
-//                     expected.len()
-//                 );
-//                 continue;
-//             }
-
-//             for i in 0..expected.len() {
-//                 if got[i].start != expected[i].start {
-//                     assert!(
-//                         false,
-//                         "parseRange({}, {})[{}].start = {}, want {}",
-//                         header, size, i, got[i].start, expected[i].start
-//                     )
-//                 }
-//                 if got[i].length != expected[i].length {
-//                     assert!(
-//                         false,
-//                         "parseRange({}, {})[{}].length = {}, want {}",
-//                         header, size, i, got[i].length, expected[i].length
-//                     )
-//                 }
-//             }
-//         }
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::Duration;
+    use std::ops::Add;
+
+    use super::*;
+    use application::App;
+    use body::{Binary, Body};
+    use http::{header, Method, StatusCode};
+    use test::{self, TestRequest};
+
+    #[test]
+    fn test_file_extension_to_mime() {
+        let m = file_extension_to_mime("jpg");
+        assert_eq!(m, mime::IMAGE_JPEG);
+
+        let m = file_extension_to_mime("invalid extension!!");
+        assert_eq!(m, mime::APPLICATION_OCTET_STREAM);
+
+        let m = file_extension_to_mime("");
+        assert_eq!(m, mime::APPLICATION_OCTET_STREAM);
+    }
+
+    #[test]
+    fn test_if_modified_since_without_if_none_match() {
+        let mut file = NamedFile::open("Cargo.toml")
+            .unwrap()
+            .set_cpu_pool(CpuPool::new(1));
+        let since = header::HttpDate::from(
+            SystemTime::now().add(Duration::from_secs(60)));
+
+        let req = TestRequest::default()
+            .header(header::IF_MODIFIED_SINCE, since)
+            .finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_MODIFIED
+        );
+    }
+
+    #[test]
+    fn test_if_modified_since_with_if_none_match() {
+        let mut file = NamedFile::open("Cargo.toml")
+            .unwrap()
+            .set_cpu_pool(CpuPool::new(1));
+        let since = header::HttpDate::from(
+            SystemTime::now().add(Duration::from_secs(60)));
+
+        let req = TestRequest::default()
+            .header(header::IF_NONE_MATCH, "miss_etag")
+            .header(header::IF_MODIFIED_SINCE, since)
+            .finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_MODIFIED
+        );
+    }
+
+    #[test]
+    fn test_named_file_text() {
+        assert!(NamedFile::open("test--").is_err());
+        let mut file = NamedFile::open("Cargo.toml")
+            .unwrap()
+            .set_cpu_pool(CpuPool::new(1));
+        {
+            file.file();
+            let _f: &File = &file;
+        }
+        {
+            let _f: &mut File = &mut file;
+        }
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/x-toml"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "inline; filename=\"Cargo.toml\""
+        );
+    }
+
+    #[test]
+    fn test_named_file_set_content_type() {
+        let mut file = NamedFile::open("Cargo.toml")
+            .unwrap()
+            .set_content_type(mime::TEXT_XML)
+            .set_cpu_pool(CpuPool::new(1));
+        {
+            file.file();
+            let _f: &File = &file;
+        }
+        {
+            let _f: &mut File = &mut file;
+        }
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/xml"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "inline; filename=\"Cargo.toml\""
+        );
+    }
+
+    #[test]
+    fn test_named_file_image() {
+        let mut file = NamedFile::open("tests/test.png")
+            .unwrap()
+            .set_cpu_pool(CpuPool::new(1));
+        {
+            file.file();
+            let _f: &File = &file;
+        }
+        {
+            let _f: &mut File = &mut file;
+        }
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "inline; filename=\"test.png\""
+        );
+    }
+
+    #[test]
+    fn test_named_file_image_attachment() {
+        use header::{ContentDisposition, DispositionParam, DispositionType};
+        let cd = ContentDisposition {
+            disposition: DispositionType::Attachment,
+            parameters: vec![DispositionParam::Filename(String::from("test.png"))],
+        };
+        let mut file = NamedFile::open("tests/test.png")
+            .unwrap()
+            .set_content_disposition(cd)
+            .set_cpu_pool(CpuPool::new(1));
+        {
+            file.file();
+            let _f: &File = &file;
+        }
+        {
+            let _f: &mut File = &mut file;
+        }
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "attachment; filename=\"test.png\""
+        );
+    }
+
+    #[derive(Default)]
+    pub struct AllAttachmentConfig;
+    impl StaticFileConfig for AllAttachmentConfig {
+        fn content_disposition_map(_typ: mime::Name) -> DispositionType {
+            DispositionType::Attachment
+        }
+    }
+
+    #[derive(Default)]
+    pub struct AllInlineConfig;
+    impl StaticFileConfig for AllInlineConfig {
+        fn content_disposition_map(_typ: mime::Name) -> DispositionType {
+            DispositionType::Inline
+        }
+    }
+
+    #[test]
+    fn test_named_file_image_attachment_and_custom_config() {
+        let file = NamedFile::open_with_config("tests/test.png", AllAttachmentConfig)
+            .unwrap()
+            .set_cpu_pool(CpuPool::new(1));
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "attachment; filename=\"test.png\""
+        );
+
+        let file = NamedFile::open_with_config("tests/test.png", AllInlineConfig)
+            .unwrap()
+            .set_cpu_pool(CpuPool::new(1));
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "inline; filename=\"test.png\""
+        );
+    }
+
+    #[test]
+    fn test_named_file_binary() {
+        let mut file = NamedFile::open("tests/test.binary")
+            .unwrap()
+            .set_cpu_pool(CpuPool::new(1));
+        {
+            file.file();
+            let _f: &File = &file;
+        }
+        {
+            let _f: &mut File = &mut file;
+        }
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "attachment; filename=\"test.binary\""
+        );
+    }
+
+    #[test]
+    fn test_named_file_status_code_text() {
+        let mut file = NamedFile::open("Cargo.toml")
+            .unwrap()
+            .set_status_code(StatusCode::NOT_FOUND)
+            .set_cpu_pool(CpuPool::new(1));
+        {
+            file.file();
+            let _f: &File = &file;
+        }
+        {
+            let _f: &mut File = &mut file;
+        }
+
+        let req = TestRequest::default().finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/x-toml"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "inline; filename=\"Cargo.toml\""
+        );
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_named_file_ranges_status_code() {
+        let mut srv = test::TestServer::with_factory(|| {
+            App::new().handler(
+                "test",
+                StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
+            )
+        });
+
+        // Valid range header
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/Cargo.toml"))
+            .header(header::RANGE, "bytes=10-20")
+            .finish()
+            .unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+
+        // Invalid range header
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/Cargo.toml"))
+            .header(header::RANGE, "bytes=1-0")
+            .finish()
+            .unwrap();
+        let response = srv.execute(request.send()).unwrap();
+
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    }
+
+    #[test]
+    fn test_named_file_content_range_headers() {
+        let mut srv = test::TestServer::with_factory(|| {
+            App::new().handler(
+                "test",
+                StaticFiles::new(".")
+                    .unwrap()
+                    .index_file("tests/test.binary"),
+            )
+        });
+
+        // Valid range header
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/tests/test.binary"))
+            .header(header::RANGE, "bytes=10-20")
+            .finish()
+            .unwrap();
+
+        let response = srv.execute(request.send()).unwrap();
+
+        let contentrange = response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        assert_eq!(contentrange, "bytes 10-20/100");
+
+        // Invalid range header
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/tests/test.binary"))
+            .header(header::RANGE, "bytes=10-5")
+            .finish()
+            .unwrap();
+
+        let response = srv.execute(request.send()).unwrap();
+
+        let contentrange = response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        assert_eq!(contentrange, "bytes */100");
+    }
+
+    #[test]
+    fn test_named_file_content_length_headers() {
+        let mut srv = test::TestServer::with_factory(|| {
+            App::new().handler(
+                "test",
+                StaticFiles::new(".")
+                    .unwrap()
+                    .index_file("tests/test.binary"),
+            )
+        });
+
+        // Valid range header
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/tests/test.binary"))
+            .header(header::RANGE, "bytes=10-20")
+            .finish()
+            .unwrap();
+
+        let response = srv.execute(request.send()).unwrap();
+
+        let contentlength = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        assert_eq!(contentlength, "11");
+
+        // Invalid range header
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/tests/test.binary"))
+            .header(header::RANGE, "bytes=10-8")
+            .finish()
+            .unwrap();
+
+        let response = srv.execute(request.send()).unwrap();
+
+        let contentlength = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        assert_eq!(contentlength, "0");
+
+        // Without range header
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/tests/test.binary"))
+            .no_default_headers()
+            .finish()
+            .unwrap();
+
+        let response = srv.execute(request.send()).unwrap();
+
+        let contentlength = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        assert_eq!(contentlength, "100");
+
+        // chunked
+        let request = srv
+            .get()
+            .uri(srv.url("/t%65st/tests/test.binary"))
+            .finish()
+            .unwrap();
+
+        let response = srv.execute(request.send()).unwrap();
+        {
+            let te = response
+                .headers()
+                .get(header::TRANSFER_ENCODING)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert_eq!(te, "chunked");
+        }
+        let bytes = srv.execute(response.body()).unwrap();
+        let data = Bytes::from(fs::read("tests/test.binary").unwrap());
+        assert_eq!(bytes, data);
+    }
+
+    #[test]
+    fn test_static_files_with_spaces() {
+        let mut srv = test::TestServer::with_factory(|| {
+            App::new().handler(
+                "/",
+                StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
+            )
+        });
+        let request = srv
+            .get()
+            .uri(srv.url("/tests/test%20space.binary"))
+            .finish()
+            .unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = srv.execute(response.body()).unwrap();
+        let data = Bytes::from(fs::read("tests/test space.binary").unwrap());
+        assert_eq!(bytes, data);
+    }
+
+    #[derive(Default)]
+    pub struct OnlyMethodHeadConfig;
+    impl StaticFileConfig for OnlyMethodHeadConfig {
+        fn is_method_allowed(method: &Method) -> bool {
+            match *method {
+                Method::HEAD => true,
+                _ => false,
+            }
+        }
+    }
+
+    #[test]
+    fn test_named_file_not_allowed() {
+        let file =
+            NamedFile::open_with_config("Cargo.toml", OnlyMethodHeadConfig).unwrap();
+        let req = TestRequest::default().method(Method::POST).finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let file =
+            NamedFile::open_with_config("Cargo.toml", OnlyMethodHeadConfig).unwrap();
+        let req = TestRequest::default().method(Method::PUT).finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let file =
+            NamedFile::open_with_config("Cargo.toml", OnlyMethodHeadConfig).unwrap();
+        let req = TestRequest::default().method(Method::GET).finish();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[test]
+    fn test_named_file_content_encoding() {
+        let req = TestRequest::default().method(Method::GET).finish();
+        let file = NamedFile::open("Cargo.toml").unwrap();
+
+        assert!(file.encoding.is_none());
+        let resp = file
+            .set_content_encoding(ContentEncoding::Identity)
+            .respond_to(&req)
+            .unwrap();
+
+        assert!(resp.content_encoding().is_some());
+        assert_eq!(resp.content_encoding().unwrap().as_str(), "identity");
+    }
+
+    #[test]
+    fn test_named_file_any_method() {
+        let req = TestRequest::default().method(Method::POST).finish();
+        let file = NamedFile::open("Cargo.toml").unwrap();
+        let resp = file.respond_to(&req).unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn test_static_files() {
+        let mut st = StaticFiles::new(".").unwrap().show_files_listing();
+        let req = TestRequest::with_uri("/missing")
+            .param("tail", "missing")
+            .finish();
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        st.show_index = false;
+        let req = TestRequest::default().finish();
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let req = TestRequest::default().param("tail", "").finish();
+
+        st.show_index = true;
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+        assert!(resp.body().is_binary());
+        assert!(format!("{:?}", resp.body()).contains("README.md"));
+    }
+
+    #[test]
+    fn test_static_files_bad_directory() {
+        let st: Result<StaticFiles<()>, Error> = StaticFiles::new("missing");
+        assert!(st.is_err());
+
+        let st: Result<StaticFiles<()>, Error> = StaticFiles::new("Cargo.toml");
+        assert!(st.is_err());
+    }
+
+    #[test]
+    fn test_default_handler_file_missing() {
+        let st = StaticFiles::new(".")
+            .unwrap()
+            .default_handler(|_: &_| "default content");
+        let req = TestRequest::with_uri("/missing")
+            .param("tail", "missing")
+            .finish();
+
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.body(),
+            &Body::Binary(Binary::Slice(b"default content"))
+        );
+    }
+
+    #[test]
+    fn test_serve_index() {
+        let st = StaticFiles::new(".").unwrap().index_file("test.binary");
+        let req = TestRequest::default().uri("/tests").finish();
+
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).expect("content type"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).expect("content disposition"),
+            "attachment; filename=\"test.binary\""
+        );
+
+        let req = TestRequest::default().uri("/tests/").finish();
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "attachment; filename=\"test.binary\""
+        );
+
+        // nonexistent index file
+        let req = TestRequest::default().uri("/tests/unknown").finish();
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let req = TestRequest::default().uri("/tests/unknown/").finish();
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_serve_index_nested() {
+        let st = StaticFiles::new(".").unwrap().index_file("mod.rs");
+        let req = TestRequest::default().uri("/src/client").finish();
+        let resp = st.handle(&req).respond_to(&req).unwrap();
+        let resp = resp.as_msg();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/x-rust"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "inline; filename=\"mod.rs\""
+        );
+    }
+
+    #[test]
+    fn integration_serve_index_with_prefix() {
+        let mut srv = test::TestServer::with_factory(|| {
+            App::new()
+                .prefix("public")
+                .handler("/", StaticFiles::new(".").unwrap().index_file("Cargo.toml"))
+        });
+
+        let request = srv.get().uri(srv.url("/public")).finish().unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = srv.execute(response.body()).unwrap();
+        let data = Bytes::from(fs::read("Cargo.toml").unwrap());
+        assert_eq!(bytes, data);
+
+        let request = srv.get().uri(srv.url("/public/")).finish().unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = srv.execute(response.body()).unwrap();
+        let data = Bytes::from(fs::read("Cargo.toml").unwrap());
+        assert_eq!(bytes, data);
+    }
+
+    #[test]
+    fn integration_serve_index() {
+        let mut srv = test::TestServer::with_factory(|| {
+            App::new().handler(
+                "test",
+                StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
+            )
+        });
+
+        let request = srv.get().uri(srv.url("/test")).finish().unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = srv.execute(response.body()).unwrap();
+        let data = Bytes::from(fs::read("Cargo.toml").unwrap());
+        assert_eq!(bytes, data);
+
+        let request = srv.get().uri(srv.url("/test/")).finish().unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = srv.execute(response.body()).unwrap();
+        let data = Bytes::from(fs::read("Cargo.toml").unwrap());
+        assert_eq!(bytes, data);
+
+        // nonexistent index file
+        let request = srv.get().uri(srv.url("/test/unknown")).finish().unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let request = srv.get().uri(srv.url("/test/unknown/")).finish().unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn integration_percent_encoded() {
+        let mut srv = test::TestServer::with_factory(|| {
+            App::new().handler(
+                "test",
+                StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
+            )
+        });
+
+        let request = srv
+            .get()
+            .uri(srv.url("/test/%43argo.toml"))
+            .finish()
+            .unwrap();
+        let response = srv.execute(request.send()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    struct T(&'static str, u64, Vec<HttpRange>);
+
+    #[test]
+    fn test_parse() {
+        let tests = vec![
+            T("", 0, vec![]),
+            T("", 1000, vec![]),
+            T("foo", 0, vec![]),
+            T("bytes=", 0, vec![]),
+            T("bytes=7", 10, vec![]),
+            T("bytes= 7 ", 10, vec![]),
+            T("bytes=1-", 0, vec![]),
+            T("bytes=5-4", 10, vec![]),
+            T("bytes=0-2,5-4", 10, vec![]),
+            T("bytes=2-5,4-3", 10, vec![]),
+            T("bytes=--5,4--3", 10, vec![]),
+            T("bytes=A-", 10, vec![]),
+            T("bytes=A- ", 10, vec![]),
+            T("bytes=A-Z", 10, vec![]),
+            T("bytes= -Z", 10, vec![]),
+            T("bytes=5-Z", 10, vec![]),
+            T("bytes=Ran-dom, garbage", 10, vec![]),
+            T("bytes=0x01-0x02", 10, vec![]),
+            T("bytes=         ", 10, vec![]),
+            T("bytes= , , ,   ", 10, vec![]),
+            T(
+                "bytes=0-9",
+                10,
+                vec![HttpRange {
+                    start: 0,
+                    length: 10,
+                }],
+            ),
+            T(
+                "bytes=0-",
+                10,
+                vec![HttpRange {
+                    start: 0,
+                    length: 10,
+                }],
+            ),
+            T(
+                "bytes=5-",
+                10,
+                vec![HttpRange {
+                    start: 5,
+                    length: 5,
+                }],
+            ),
+            T(
+                "bytes=0-20",
+                10,
+                vec![HttpRange {
+                    start: 0,
+                    length: 10,
+                }],
+            ),
+            T(
+                "bytes=15-,0-5",
+                10,
+                vec![HttpRange {
+                    start: 0,
+                    length: 6,
+                }],
+            ),
+            T(
+                "bytes=1-2,5-",
+                10,
+                vec![
+                    HttpRange {
+                        start: 1,
+                        length: 2,
+                    },
+                    HttpRange {
+                        start: 5,
+                        length: 5,
+                    },
+                ],
+            ),
+            T(
+                "bytes=-2 , 7-",
+                11,
+                vec![
+                    HttpRange {
+                        start: 9,
+                        length: 2,
+                    },
+                    HttpRange {
+                        start: 7,
+                        length: 4,
+                    },
+                ],
+            ),
+            T(
+                "bytes=0-0 ,2-2, 7-",
+                11,
+                vec![
+                    HttpRange {
+                        start: 0,
+                        length: 1,
+                    },
+                    HttpRange {
+                        start: 2,
+                        length: 1,
+                    },
+                    HttpRange {
+                        start: 7,
+                        length: 4,
+                    },
+                ],
+            ),
+            T(
+                "bytes=-5",
+                10,
+                vec![HttpRange {
+                    start: 5,
+                    length: 5,
+                }],
+            ),
+            T(
+                "bytes=-15",
+                10,
+                vec![HttpRange {
+                    start: 0,
+                    length: 10,
+                }],
+            ),
+            T(
+                "bytes=0-499",
+                10000,
+                vec![HttpRange {
+                    start: 0,
+                    length: 500,
+                }],
+            ),
+            T(
+                "bytes=500-999",
+                10000,
+                vec![HttpRange {
+                    start: 500,
+                    length: 500,
+                }],
+            ),
+            T(
+                "bytes=-500",
+                10000,
+                vec![HttpRange {
+                    start: 9500,
+                    length: 500,
+                }],
+            ),
+            T(
+                "bytes=9500-",
+                10000,
+                vec![HttpRange {
+                    start: 9500,
+                    length: 500,
+                }],
+            ),
+            T(
+                "bytes=0-0,-1",
+                10000,
+                vec![
+                    HttpRange {
+                        start: 0,
+                        length: 1,
+                    },
+                    HttpRange {
+                        start: 9999,
+                        length: 1,
+                    },
+                ],
+            ),
+            T(
+                "bytes=500-600,601-999",
+                10000,
+                vec![
+                    HttpRange {
+                        start: 500,
+                        length: 101,
+                    },
+                    HttpRange {
+                        start: 601,
+                        length: 399,
+                    },
+                ],
+            ),
+            T(
+                "bytes=500-700,601-999",
+                10000,
+                vec![
+                    HttpRange {
+                        start: 500,
+                        length: 201,
+                    },
+                    HttpRange {
+                        start: 601,
+                        length: 399,
+                    },
+                ],
+            ),
+            // Match Apache laxity:
+            T(
+                "bytes=   1 -2   ,  4- 5, 7 - 8 , ,,",
+                11,
+                vec![
+                    HttpRange {
+                        start: 1,
+                        length: 2,
+                    },
+                    HttpRange {
+                        start: 4,
+                        length: 2,
+                    },
+                    HttpRange {
+                        start: 7,
+                        length: 2,
+                    },
+                ],
+            ),
+        ];
+
+        for t in tests {
+            let header = t.0;
+            let size = t.1;
+            let expected = t.2;
+
+            let res = HttpRange::parse(header, size);
+
+            if res.is_err() {
+                if expected.is_empty() {
+                    continue;
+                } else {
+                    assert!(
+                        false,
+                        "parse({}, {}) returned error {:?}",
+                        header,
+                        size,
+                        res.unwrap_err()
+                    );
+                }
+            }
+
+            let got = res.unwrap();
+
+            if got.len() != expected.len() {
+                assert!(
+                    false,
+                    "len(parseRange({}, {})) = {}, want {}",
+                    header,
+                    size,
+                    got.len(),
+                    expected.len()
+                );
+                continue;
+            }
+
+            for i in 0..expected.len() {
+                if got[i].start != expected[i].start {
+                    assert!(
+                        false,
+                        "parseRange({}, {})[{}].start = {}, want {}",
+                        header, size, i, got[i].start, expected[i].start
+                    )
+                }
+                if got[i].length != expected[i].length {
+                    assert!(
+                        false,
+                        "parseRange({}, {})[{}].length = {}, want {}",
+                        header, size, i, got[i].length, expected[i].length
+                    )
+                }
+            }
+        }
+    }
+}
