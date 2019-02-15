@@ -24,7 +24,7 @@ use percent_encoding::{utf8_percent_encode, DEFAULT_ENCODE_SET};
 use derive_more::{Display};
 use parking_lot::Mutex;
 
-use futures::future::{self, FutureResult};
+use futures::future::{ok, err, FutureResult};
 use actix_http::error::{
     Error,
 };
@@ -38,7 +38,7 @@ use actix_router::PathDeserializer;
 use crate::request::HttpRequest;
 use crate::responder::Responder;
 use crate::service::ServiceRequest;
-use crate::resource::Resource;
+use crate::handler::FromRequest;
 use crate::helpers::{HttpDefaultNewService};
 
 // use header;
@@ -429,11 +429,11 @@ impl<C: StaticFileConfig> Responder for NamedFile<C> {
                 fut: None,
                 counter: 0,
             };
-            return future::ok(resp.streaming(reader));
+            return ok(resp.streaming(reader));
         }
 
         if !C::is_method_allowed(req.method()) {
-            return future::ok(Response::MethodNotAllowed()
+            return ok(Response::MethodNotAllowed()
                 .header(header::CONTENT_TYPE, "text/plain")
                 .header(header::ALLOW, "GET, HEAD")
                 .body("This resource only supports GET and HEAD."));
@@ -511,23 +511,23 @@ impl<C: StaticFileConfig> Responder for NamedFile<C> {
                     );
                 } else {
                     resp.header(header::CONTENT_RANGE, format!("bytes */{}", length));
-                    return future::ok(resp.status(StatusCode::RANGE_NOT_SATISFIABLE).finish());
+                    return ok(resp.status(StatusCode::RANGE_NOT_SATISFIABLE).finish());
                 };
             } else {
-                return future::ok(resp.status(StatusCode::BAD_REQUEST).finish());
+                return ok(resp.status(StatusCode::BAD_REQUEST).finish());
             };
         };
 
         resp.header(header::CONTENT_LENGTH, format!("{}", length));
 
         if precondition_failed {
-            return future::ok(resp.status(StatusCode::PRECONDITION_FAILED).finish());
+            return ok(resp.status(StatusCode::PRECONDITION_FAILED).finish());
         } else if not_modified {
-            return future::ok(resp.status(StatusCode::NOT_MODIFIED).finish());
+            return ok(resp.status(StatusCode::NOT_MODIFIED).finish());
         }
 
         if *req.method() == Method::HEAD {
-            future::ok(resp.finish())
+            ok(resp.finish())
         } else {
             let reader = ChunkedReadFile {
                 offset,
@@ -538,9 +538,9 @@ impl<C: StaticFileConfig> Responder for NamedFile<C> {
                 counter: 0,
             };
             if offset != 0 || length != self.md.len() {
-                return future::ok(resp.status(StatusCode::PARTIAL_CONTENT).streaming(reader));
+                return ok(resp.status(StatusCode::PARTIAL_CONTENT).streaming(reader));
             };
-            future::ok(resp.streaming(reader))
+            ok(resp.streaming(reader))
         }
     }
 }
@@ -854,7 +854,7 @@ struct StaticFilesService<S, C = DefaultConfig> {
 }
 
 impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
-    type Request = HttpRequest;
+    type Request = ServiceRequest<S>;
     type Response = Response;
     type Error = Error;
     type Future = FutureResult<Response, Error>;
@@ -864,16 +864,15 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
     }
     
     fn call(&mut self, req: Self::Request) -> Self::Future {
-        let tail: String = req.match_info().get_decoded("tail").unwrap_or_else(|| "".to_string());
-        let relpath = match PathBuf::from_param(tail.trim_left_matches('/')) {
-            Ok(relpath) => relpath,
-            Err(e) => return future::err(Error::from(e)),
+        let real_path = match PathBuf::from_request(&mut req).poll() {
+            Ok(Async::Ready(item)) => item,
+            Ok(Async::NotReady) => unreachable!(),
+            Err(e) => return err(Error::from(e)),
         };
-
         // full filepath
-        let path = match self.sf.directory.join(&relpath).canonicalize() {
+        let path = match self.sf.directory.join(&real_path).canonicalize() {
             Ok(path) => path,
-            Err(e) => return future::err(Error::from(e)),
+            Err(e) => return err(Error::from(e)),
         };
 
         if path.is_dir() {
@@ -884,33 +883,66 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
                     Ok(named_file) => match named_file
                         .set_cpu_pool(self.sf.cpu_pool.clone())
                         .respond_to(&req).poll() {
-                            Ok(Async::Ready(item)) => future::ok(item),
+                            Ok(Async::Ready(item)) => ok(item),
                             Ok(Async::NotReady) => unreachable!(),
-                            Err(e) => future::err(Error::from(e)),
+                            Err(e) => err(Error::from(e)),
                         },
-                    Err(e) => future::err(Error::from(e)),
+                    Err(e) => err(Error::from(e)),
                 }
             } else if self.sf.show_index {
                 let dir = Directory::new(self.sf.directory.clone(), path);
                 match (*self.sf.renderer)(&dir, &req) {
-                    Ok(resp) => future::ok(resp),
-                    Err(e) => future::err(Error::from(e)),
+                    Ok(resp) => ok(resp),
+                    Err(e) => err(Error::from(e)),
                 }
             } else {
-                future::err(StaticFilesError::IsDirectory.into())
+                err(StaticFilesError::IsDirectory.into())
             }
         } else {
             match NamedFile::open_with_config(path, C::default()) {
                 Ok(named_file) => match named_file
                     .set_cpu_pool(self.sf.cpu_pool.clone())
                     .respond_to(&req).poll() {
-                        Ok(Async::Ready(item)) => future::ok(item),
+                        Ok(Async::Ready(item)) => ok(item),
                         Ok(Async::NotReady) => unreachable!(),
-                        Err(e) => future::err(Error::from(e)),
+                        Err(e) => err(Error::from(e)),
                     },
-                Err(e) => future::err(Error::from(e)),
+                Err(e) => err(Error::from(e)),
             }
         }
+    }
+}
+
+impl<P> FromRequest<P> for PathBuf {
+    type Error = UriSegmentError;
+    type Future = FutureResult<Self, Self::Error>;
+    
+    fn from_request(req: &mut ServiceRequest<P>) -> Self::Future {
+        let path_str = req.match_info().path();
+        let mut buf = PathBuf::new();
+        for segment in path_str.split('/') {
+            if segment == ".." {
+                buf.pop();
+            } else if segment.starts_with('.') {
+                return err(UriSegmentError::BadStart('.'));
+            } else if segment.starts_with('*') {
+                return err(UriSegmentError::BadStart('*'));
+            } else if segment.ends_with(':') {
+                return err(UriSegmentError::BadEnd(':'));
+            } else if segment.ends_with('>') {
+                return err(UriSegmentError::BadEnd('>'));
+            } else if segment.ends_with('<') {
+                return err(UriSegmentError::BadEnd('<'));
+            } else if segment.is_empty() {
+                continue;
+            } else if cfg!(windows) && segment.contains('\\') {
+                return err(UriSegmentError::BadChar('\\'));
+            } else {
+                buf.push(segment)
+            }
+        }
+
+        ok(buf)
     }
 }
 
