@@ -81,47 +81,57 @@ where
     }
 
     /// Register a new `GET` route.
-    pub fn get<F>(mut self, f: F) -> Self
+    pub fn get<F, I, R>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<P>) -> Route<P>,
+        F: Factory<I, R> + 'static,
+        I: FromRequest<P> + 'static,
+        R: Responder + 'static,
     {
-        self.routes.push(f(Route::get()));
+        self.routes.push(Route::get().to(f));
         self
     }
 
     /// Register a new `POST` route.
-    pub fn post<F>(mut self, f: F) -> Self
+    pub fn post<F, I, R>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<P>) -> Route<P>,
+        F: Factory<I, R> + 'static,
+        I: FromRequest<P> + 'static,
+        R: Responder + 'static,
     {
-        self.routes.push(f(Route::post()));
+        self.routes.push(Route::post().to(f));
         self
     }
 
     /// Register a new `PUT` route.
-    pub fn put<F>(mut self, f: F) -> Self
+    pub fn put<F, I, R>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<P>) -> Route<P>,
+        F: Factory<I, R> + 'static,
+        I: FromRequest<P> + 'static,
+        R: Responder + 'static,
     {
-        self.routes.push(f(Route::put()));
+        self.routes.push(Route::put().to(f));
         self
     }
 
     /// Register a new `DELETE` route.
-    pub fn delete<F>(mut self, f: F) -> Self
+    pub fn delete<F, I, R>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<P>) -> Route<P>,
+        F: Factory<I, R> + 'static,
+        I: FromRequest<P> + 'static,
+        R: Responder + 'static,
     {
-        self.routes.push(f(Route::delete()));
+        self.routes.push(Route::delete().to(f));
         self
     }
 
     /// Register a new `HEAD` route.
-    pub fn head<F>(mut self, f: F) -> Self
+    pub fn head<F, I, R>(mut self, f: F) -> Self
     where
-        F: FnOnce(RouteBuilder<P>) -> Route<P>,
+        F: Factory<I, R> + 'static,
+        I: FromRequest<P> + 'static,
+        R: Responder + 'static,
     {
-        self.routes.push(f(Route::build().method(Method::HEAD)));
+        self.routes.push(Route::build().method(Method::HEAD).to(f));
         self
     }
 
