@@ -38,6 +38,12 @@ impl<P> Resource<P> {
     }
 }
 
+impl<P> Default for Resource<P> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<P: 'static, T> Resource<P, T>
 where
     T: NewService<
@@ -88,7 +94,7 @@ where
     where
         F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
-        self.routes.push(f(Route::get()));
+        self.routes.push(f(Route::post()));
         self
     }
 
@@ -97,7 +103,7 @@ where
     where
         F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
-        self.routes.push(f(Route::get()));
+        self.routes.push(f(Route::put()));
         self
     }
 
@@ -106,7 +112,7 @@ where
     where
         F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
-        self.routes.push(f(Route::get()));
+        self.routes.push(f(Route::delete()));
         self
     }
 
@@ -115,7 +121,7 @@ where
     where
         F: FnOnce(RouteBuilder<P>) -> Route<P>,
     {
-        self.routes.push(f(Route::get()));
+        self.routes.push(f(Route::build().method(Method::HEAD)));
         self
     }
 

@@ -3,6 +3,11 @@ use std::marker::PhantomData;
 use actix_service::{NewTransform, Service, Transform};
 use futures::future::{ok, FutureResult};
 
+#[cfg(any(feature = "brotli", feature = "flate2"))]
+mod compress;
+#[cfg(any(feature = "brotli", feature = "flate2"))]
+pub use self::compress::Compress;
+
 mod defaultheaders;
 pub use self::defaultheaders::DefaultHeaders;
 

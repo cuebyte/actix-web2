@@ -23,6 +23,18 @@ codecov = { repository = "actix/actix-web2", branch = "master", service = "githu
 name = "actix_web2"
 path = "src/lib.rs"
 
+[features]
+default = ["brotli", "flate2-c"]
+
+# brotli encoding, requires c compiler
+brotli = ["brotli2"]
+
+# miniz-sys backend for flate2 crate
+flate2-c = ["flate2/miniz-sys"]
+
+# rust backend for flate2 crate
+flate2-rust = ["flate2/rust_backend"]
+
 [dependencies]
 actix-codec = "0.1.0"
 actix-service = "0.2.1"
@@ -38,12 +50,21 @@ futures = "0.1"
 derive_more = "0.14"
 log = "0.4"
 mime = "0.3"
-serde = "1.0"
+serde = { version="1.0", features=["derive"] }
 serde_json = "1.0"
 encoding = "0.2"
 serde_urlencoded = "^0.5.3"
 
+# compression
+brotli2 = { version="^0.3.2", optional = true }
+flate2 = { version="^1.0.2", optional = true, default-features = false }
+
 [dev-dependencies]
+actix-rt = "0.1.0"
+actix-server = { version="0.2", features=["ssl"] }
+actix-http = { git = "https://github.com/actix/actix-http.git", features=["ssl"] }
+actix-http-test = { git = "https://github.com/actix/actix-http.git", features=["ssl"] }
+rand = "0.6"
 env_logger = "0.5"
 serde_derive = "1.0"
 

@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use actix_http::body::{Body, MessageBody};
 use actix_http::{Extensions, PayloadStream, Request, Response};
 use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
 use actix_service::{
@@ -29,7 +30,7 @@ pub trait HttpServiceFactory<Request> {
 }
 
 /// Application builder
-pub struct App<P, T> {
+pub struct App<P, B, T> {
     services: Vec<(
         ResourceDef,
         BoxedHttpNewService<ServiceRequest<P>, Response>,
@@ -41,10 +42,10 @@ pub struct App<P, T> {
     factory_ref: Rc<RefCell<Option<AppFactory<P>>>>,
     extensions: Extensions,
     state: Vec<Box<StateFactory>>,
-    _t: PhantomData<P>,
+    _t: PhantomData<(P, B)>,
 }
 
-impl App<PayloadStream, AppEntry<PayloadStream>> {
+impl App<PayloadStream, Body, AppEntry<PayloadStream>> {
     /// Create application with empty state. Application can
     /// be configured with a builder-like pattern.
     pub fn new() -> Self {
@@ -52,13 +53,13 @@ impl App<PayloadStream, AppEntry<PayloadStream>> {
     }
 }
 
-impl Default for App<PayloadStream, AppEntry<PayloadStream>> {
+impl Default for App<PayloadStream, Body, AppEntry<PayloadStream>> {
     fn default() -> Self {
         App::new()
     }
 }
 
-impl App<PayloadStream, AppEntry<PayloadStream>> {
+impl App<PayloadStream, Body, AppEntry<PayloadStream>> {
     /// Create application with specified state. Application can be
     /// configured with a builder-like pattern.
     ///
@@ -120,11 +121,13 @@ impl App<PayloadStream, AppEntry<PayloadStream>> {
 //     _t: PhantomData<P>,
 // }
 
-impl<P: 'static, T> App<P, T>
+impl<P, B, T> App<P, B, T>
 where
+    P: 'static,
+    B: MessageBody,
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response,
+        Response = Response<B>,
         Error = (),
         InitError = (),
     >,
@@ -215,14 +218,15 @@ where
     }
 
     /// Register a middleware.
-    pub fn middleware<M, F>(
+    pub fn middleware<M, B1, F>(
         self,
         mw: F,
     ) -> App<
         P,
+        B1,
         impl NewService<
             Request = ServiceRequest<P>,
-            Response = Response,
+            Response = Response<B1>,
             Error = (),
             InitError = (),
         >,
@@ -231,10 +235,11 @@ where
         M: NewTransform<
             T::Service,
             Request = ServiceRequest<P>,
-            Response = Response,
+            Response = Response<B1>,
             Error = (),
             InitError = (),
         >,
+        B1: MessageBody,
         F: IntoNewTransform<M, T::Service>,
     {
         let endpoint = ApplyNewService::new(mw, self.endpoint);
@@ -287,12 +292,12 @@ where
     }
 }
 
-impl<T, P: 'static> IntoNewService<AndThenNewService<AppStateFactory<P>, T>>
-    for App<P, T>
+impl<T, P: 'static, B: MessageBody>
+    IntoNewService<AndThenNewService<AppStateFactory<P>, T>> for App<P, B, T>
 where
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response,
+        Response = Response<B>,
         Error = (),
         InitError = (),
     >,
@@ -366,21 +371,17 @@ impl<P> Future for AppStateFactoryResult<P> {
                     idx += 1;
                 }
             }
-            if self.state.is_empty() {
-                Ok(Async::Ready(AppStateService {
-                    extensions: self.extensions.borrow().clone(),
-                    _t: PhantomData,
-                }))
-            } else {
-                Ok(Async::NotReady)
+            if !self.state.is_empty() {
+                return Ok(Async::NotReady);
             }
         } else {
             log::warn!("Multiple copies of app extensions exists");
-            Ok(Async::Ready(AppStateService {
-                extensions: self.extensions.borrow().clone(),
-                _t: PhantomData,
-            }))
         }
+
+        Ok(Async::Ready(AppStateService {
+            extensions: self.extensions.borrow().clone(),
+            _t: PhantomData,
+        }))
     }
 }
 

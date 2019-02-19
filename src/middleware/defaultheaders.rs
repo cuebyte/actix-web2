@@ -138,8 +138,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::header::CONTENT_TYPE;
-    use test::TestRequest;
+    use actix_http::http::header::CONTENT_TYPE;
+    use actix_http::test::TestRequest;
 
     #[test]
     fn test_default_headers() {
@@ -147,14 +147,14 @@ mod tests {
 
         let req = TestRequest::default().finish();
 
-        let resp = HttpResponse::Ok().finish();
+        let resp = Response::Ok().finish();
         let resp = match mw.response(&req, resp) {
             Ok(Response::Done(resp)) => resp,
             _ => panic!(),
         };
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0001");
 
-        let resp = HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish();
+        let resp = Response::Ok().header(CONTENT_TYPE, "0002").finish();
         let resp = match mw.response(&req, resp) {
             Ok(Response::Done(resp)) => resp,
             _ => panic!(),
