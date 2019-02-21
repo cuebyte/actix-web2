@@ -7,7 +7,7 @@ use actix_http::http::header::{
     ContentEncoding, HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING,
 };
 use actix_http::http::{HttpTryFrom, StatusCode};
-use actix_http::{Error, Head, Response, ResponseHead};
+use actix_http::{Error, Head, ResponseHead};
 use actix_service::{IntoNewTransform, Service, Transform};
 use bytes::{Bytes, BytesMut};
 use futures::{Async, Future, Poll};
@@ -19,7 +19,7 @@ use brotli2::write::BrotliEncoder;
 use flate2::write::{GzEncoder, ZlibEncoder};
 
 use crate::middleware::MiddlewareFactory;
-use crate::service::ServiceRequest;
+use crate::service::{ServiceRequest, ServiceResponse};
 
 #[derive(Debug, Clone)]
 pub struct Compress(ContentEncoding);
@@ -40,11 +40,11 @@ impl<S, P, B> Transform<S> for Compress
 where
     P: 'static,
     B: MessageBody,
-    S: Service<Request = ServiceRequest<P>, Response = Response<B>>,
+    S: Service<Request = ServiceRequest<P>, Response = ServiceResponse<B>>,
     S::Future: 'static,
 {
     type Request = ServiceRequest<P>;
-    type Response = Response<Encoder<B>>;
+    type Response = ServiceResponse<Encoder<B>>;
     type Error = S::Error;
     type Future = CompressResponse<S, P, B>;
 
@@ -76,7 +76,7 @@ pub struct CompressResponse<S, P, B>
 where
     P: 'static,
     B: MessageBody,
-    S: Service<Request = ServiceRequest<P>, Response = Response<B>>,
+    S: Service<Request = ServiceRequest<P>, Response = ServiceResponse<B>>,
     S::Future: 'static,
 {
     fut: S::Future,
@@ -87,10 +87,10 @@ impl<S, P, B> Future for CompressResponse<S, P, B>
 where
     P: 'static,
     B: MessageBody,
-    S: Service<Request = ServiceRequest<P>, Response = Response<B>>,
+    S: Service<Request = ServiceRequest<P>, Response = ServiceResponse<B>>,
     S::Future: 'static,
 {
-    type Item = Response<Encoder<B>>;
+    type Item = ServiceResponse<Encoder<B>>;
     type Error = S::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -106,7 +106,7 @@ impl<S, P, B> IntoNewTransform<MiddlewareFactory<Compress, S>, S> for Compress
 where
     P: 'static,
     B: MessageBody,
-    S: Service<Request = ServiceRequest<P>, Response = Response<B>>,
+    S: Service<Request = ServiceRequest<P>, Response = ServiceResponse<B>>,
     S::Future: 'static,
 {
     fn into_new_transform(self) -> MiddlewareFactory<Compress, S> {

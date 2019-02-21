@@ -12,7 +12,7 @@ use crate::handler::{AsyncFactory, Factory, FromRequest};
 use crate::helpers::{DefaultNewService, HttpDefaultNewService, HttpDefaultService};
 use crate::responder::Responder;
 use crate::route::{CreateRouteService, Route, RouteBuilder, RouteService};
-use crate::service::ServiceRequest;
+use crate::service::{ServiceRequest, ServiceResponse};
 
 /// Resource route definition
 ///
@@ -21,7 +21,9 @@ use crate::service::ServiceRequest;
 pub struct Resource<P, T = ResourceEndpoint<P>> {
     routes: Vec<Route<P>>,
     endpoint: T,
-    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>,
+    default: Rc<
+        RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, ServiceResponse>>>>,
+    >,
     factory_ref: Rc<RefCell<Option<ResourceFactory<P>>>>,
 }
 
@@ -48,7 +50,7 @@ impl<P: 'static, T> Resource<P, T>
 where
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response,
+        Response = ServiceResponse,
         Error = (),
         InitError = (),
     >,
@@ -240,7 +242,7 @@ where
         P,
         impl NewService<
             Request = ServiceRequest<P>,
-            Response = Response,
+            Response = ServiceResponse,
             Error = (),
             InitError = (),
         >,
@@ -249,7 +251,7 @@ where
         M: NewTransform<
             T::Service,
             Request = ServiceRequest<P>,
-            Response = Response,
+            Response = ServiceResponse,
             Error = (),
             InitError = (),
         >,
@@ -269,8 +271,11 @@ where
     where
         F: FnOnce(Resource<P>) -> R,
         R: IntoNewService<U>,
-        U: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>
-            + 'static,
+        U: NewService<
+                Request = ServiceRequest<P>,
+                Response = ServiceResponse,
+                Error = (),
+            > + 'static,
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(Box::new(
@@ -282,7 +287,7 @@ where
 
     pub(crate) fn get_default(
         &self,
-    ) -> Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>
+    ) -> Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, ServiceResponse>>>>>
     {
         self.default.clone()
     }
@@ -292,7 +297,7 @@ impl<P, T> IntoNewService<T> for Resource<P, T>
 where
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response,
+        Response = ServiceResponse,
         Error = (),
         InitError = (),
     >,
@@ -309,12 +314,14 @@ where
 
 pub struct ResourceFactory<P> {
     routes: Vec<Route<P>>,
-    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>,
+    default: Rc<
+        RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, ServiceResponse>>>>,
+    >,
 }
 
 impl<P> NewService for ResourceFactory<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
     type Service = ResourceService<P>;
@@ -346,9 +353,14 @@ enum CreateRouteServiceItem<P> {
 
 pub struct CreateResourceService<P> {
     fut: Vec<CreateRouteServiceItem<P>>,
-    default: Option<HttpDefaultService<ServiceRequest<P>, Response>>,
+    default: Option<HttpDefaultService<ServiceRequest<P>, ServiceResponse>>,
     default_fut: Option<
-        Box<Future<Item = HttpDefaultService<ServiceRequest<P>, Response>, Error = ()>>,
+        Box<
+            Future<
+                Item = HttpDefaultService<ServiceRequest<P>, ServiceResponse>,
+                Error = (),
+            >,
+        >,
     >,
 }
 
@@ -402,16 +414,19 @@ impl<P> Future for CreateResourceService<P> {
 
 pub struct ResourceService<P> {
     routes: Vec<RouteService<P>>,
-    default: Option<HttpDefaultService<ServiceRequest<P>, Response>>,
+    default: Option<HttpDefaultService<ServiceRequest<P>, ServiceResponse>>,
 }
 
 impl<P> Service for ResourceService<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type Future = Either<
-        ResourceServiceResponse,
-        Either<Box<Future<Item = Response, Error = ()>>, FutureResult<Response, ()>>,
+        Box<Future<Item = ServiceResponse, Error = ()>>,
+        Either<
+            Box<Future<Item = Self::Response, Error = Self::Error>>,
+            FutureResult<Self::Response, Self::Error>,
+        >,
     >;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
@@ -421,32 +436,17 @@ impl<P> Service for ResourceService<P> {
     fn call(&mut self, mut req: ServiceRequest<P>) -> Self::Future {
         for route in self.routes.iter_mut() {
             if route.check(&mut req) {
-                return Either::A(ResourceServiceResponse {
-                    fut: route.call(req),
-                });
+                return Either::A(route.call(req));
             }
         }
         if let Some(ref mut default) = self.default {
             Either::B(Either::A(default.call(req)))
         } else {
-            Either::B(Either::B(ok(Response::NotFound().finish())))
-        }
-    }
-}
-
-pub struct ResourceServiceResponse {
-    fut: Box<Future<Item = Response, Error = Error>>,
-}
-
-impl Future for ResourceServiceResponse {
-    type Item = Response;
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.fut.poll() {
-            Ok(Async::Ready(res)) => Ok(Async::Ready(res)),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(err) => Ok(Async::Ready(err.into())),
+            let req = req.into_request();
+            Either::B(Either::B(ok(ServiceResponse::new(
+                req,
+                Response::NotFound().finish(),
+            ))))
         }
     }
 }
@@ -464,7 +464,7 @@ impl<P> ResourceEndpoint<P> {
 
 impl<P> NewService for ResourceEndpoint<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
     type Service = ResourceEndpointService<P>;
@@ -499,12 +499,9 @@ pub struct ResourceEndpointService<P> {
 
 impl<P> Service for ResourceEndpointService<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
-    type Future = Either<
-        ResourceServiceResponse,
-        Either<Box<Future<Item = Response, Error = ()>>, FutureResult<Response, ()>>,
-    >;
+    type Future = <ResourceService<P> as Service>::Future;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         self.srv.poll_ready()

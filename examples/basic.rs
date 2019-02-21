@@ -30,8 +30,8 @@ fn main() {
                     .middleware(
                         middleware::DefaultHeaders::new().header("X-Version", "0.2"),
                     )
-                    .middleware(middleware::Compress)
-                    .resource("/resource1/index.html", |r| r.get(|r| r.to(index)))
+                    .middleware(middleware::Compress::default())
+                    .resource("/resource1/index.html", |r| r.get(index))
                     .service(
                         "/resource2/index.html",
                         Resource::new()

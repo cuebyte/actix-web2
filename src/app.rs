@@ -16,10 +16,10 @@ use crate::helpers::{
     BoxedHttpNewService, BoxedHttpService, DefaultNewService, HttpDefaultNewService,
 };
 use crate::resource::Resource;
-use crate::service::ServiceRequest;
+use crate::service::{ServiceRequest, ServiceResponse};
 use crate::state::{State, StateFactory, StateFactoryResult};
 
-type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
+type BoxedResponse = Box<Future<Item = ServiceResponse, Error = ()>>;
 
 pub trait HttpServiceFactory<Request> {
     type Factory: NewService<Request = Request>;
@@ -33,11 +33,16 @@ pub trait HttpServiceFactory<Request> {
 pub struct App<P, B, T> {
     services: Vec<(
         ResourceDef,
-        BoxedHttpNewService<ServiceRequest<P>, Response>,
+        BoxedHttpNewService<ServiceRequest<P>, ServiceResponse>,
     )>,
-    default: Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>,
-    defaults:
-        Vec<Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>>,
+    default: Option<Rc<HttpDefaultNewService<ServiceRequest<P>, ServiceResponse>>>,
+    defaults: Vec<
+        Rc<
+            RefCell<
+                Option<Rc<HttpDefaultNewService<ServiceRequest<P>, ServiceResponse>>>,
+            >,
+        >,
+    >,
     endpoint: T,
     factory_ref: Rc<RefCell<Option<AppFactory<P>>>>,
     extensions: Extensions,
@@ -127,7 +132,7 @@ where
     B: MessageBody,
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response<B>,
+        Response = ServiceResponse<B>,
         Error = (),
         InitError = (),
     >,
@@ -168,7 +173,7 @@ where
         F: FnOnce(Resource<P>) -> Resource<P, U>,
         U: NewService<
                 Request = ServiceRequest<P>,
-                Response = Response,
+                Response = ServiceResponse,
                 Error = (),
                 InitError = (),
             > + 'static,
@@ -191,8 +196,11 @@ where
     where
         F: FnOnce(Resource<P>) -> R,
         R: IntoNewService<U>,
-        U: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>
-            + 'static,
+        U: NewService<
+                Request = ServiceRequest<P>,
+                Response = ServiceResponse,
+                Error = (),
+            > + 'static,
     {
         // create and configure default resource
         self.default = Some(Rc::new(Box::new(DefaultNewService::new(
@@ -207,8 +215,11 @@ where
     where
         R: Into<ResourceDef>,
         F: IntoNewService<U>,
-        U: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>
-            + 'static,
+        U: NewService<
+                Request = ServiceRequest<P>,
+                Response = ServiceResponse,
+                Error = (),
+            > + 'static,
     {
         self.services.push((
             rdef.into(),
@@ -226,7 +237,7 @@ where
         B1,
         impl NewService<
             Request = ServiceRequest<P>,
-            Response = Response<B1>,
+            Response = ServiceResponse<B1>,
             Error = (),
             InitError = (),
         >,
@@ -235,7 +246,7 @@ where
         M: NewTransform<
             T::Service,
             Request = ServiceRequest<P>,
-            Response = Response<B1>,
+            Response = ServiceResponse<B1>,
             Error = (),
             InitError = (),
         >,
@@ -297,7 +308,7 @@ impl<T, P: 'static, B: MessageBody>
 where
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response<B>,
+        Response = ServiceResponse<B>,
         Error = (),
         InitError = (),
     >,
@@ -414,14 +425,14 @@ pub struct AppFactory<P> {
     services: Rc<
         Vec<(
             ResourceDef,
-            BoxedHttpNewService<ServiceRequest<P>, Response>,
+            BoxedHttpNewService<ServiceRequest<P>, ServiceResponse>,
         )>,
     >,
 }
 
 impl<P> NewService for AppFactory<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
     type Service = AppService<P>;
@@ -444,7 +455,7 @@ impl<P> NewService for AppFactory<P> {
 }
 
 type HttpServiceFut<P> =
-    Box<Future<Item = BoxedHttpService<ServiceRequest<P>, Response>, Error = ()>>;
+    Box<Future<Item = BoxedHttpService<ServiceRequest<P>, ServiceResponse>, Error = ()>>;
 
 /// Create app service
 #[doc(hidden)]
@@ -454,7 +465,10 @@ pub struct CreateAppService<P> {
 
 enum CreateAppServiceItem<P> {
     Future(Option<ResourceDef>, HttpServiceFut<P>),
-    Service(ResourceDef, BoxedHttpService<ServiceRequest<P>, Response>),
+    Service(
+        ResourceDef,
+        BoxedHttpService<ServiceRequest<P>, ServiceResponse>,
+    ),
 }
 
 impl<P> Future for CreateAppService<P> {
@@ -508,13 +522,13 @@ impl<P> Future for CreateAppService<P> {
 }
 
 pub struct AppService<P> {
-    router: Router<BoxedHttpService<ServiceRequest<P>, Response>>,
+    router: Router<BoxedHttpService<ServiceRequest<P>, ServiceResponse>>,
     ready: Option<(ServiceRequest<P>, ResourceInfo)>,
 }
 
 impl<P> Service for AppService<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
 
@@ -530,15 +544,16 @@ impl<P> Service for AppService<P> {
         if let Some((srv, _info)) = self.router.recognize_mut(req.match_info_mut()) {
             Either::A(srv.call(req))
         } else {
-            Either::B(ok(Response::NotFound().finish()))
+            let req = req.into_request();
+            Either::B(ok(ServiceResponse::new(req, Response::NotFound().finish())))
         }
     }
 }
 
-pub struct AppServiceResponse(Box<Future<Item = Response, Error = ()>>);
+pub struct AppServiceResponse(Box<Future<Item = ServiceResponse, Error = ()>>);
 
 impl Future for AppServiceResponse {
-    type Item = Response;
+    type Item = ServiceResponse;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -550,7 +565,7 @@ struct HttpNewService<P: 'static, T: NewService<Request = ServiceRequest<P>>>(T)
 
 impl<P, T> HttpNewService<P, T>
 where
-    T: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>,
+    T: NewService<Request = ServiceRequest<P>, Response = ServiceResponse, Error = ()>,
     T::Future: 'static,
     <T::Service as Service>::Future: 'static,
 {
@@ -561,13 +576,13 @@ where
 
 impl<P: 'static, T> NewService for HttpNewService<P, T>
 where
-    T: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>,
+    T: NewService<Request = ServiceRequest<P>, Response = ServiceResponse, Error = ()>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
 {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
     type Service = BoxedHttpService<ServiceRequest<P>, Self::Response>;
@@ -592,10 +607,10 @@ struct HttpServiceWrapper<T: Service, P> {
 impl<T, P> Service for HttpServiceWrapper<T, P>
 where
     T::Future: 'static,
-    T: Service<Request = ServiceRequest<P>, Response = Response, Error = ()>,
+    T: Service<Request = ServiceRequest<P>, Response = ServiceResponse, Error = ()>,
 {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type Future = BoxedResponse;
 
@@ -621,7 +636,7 @@ impl<P> AppEntry<P> {
 
 impl<P> NewService for AppEntry<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
     type Service = AppEntryService<P>;
@@ -641,7 +656,7 @@ pub struct AppEntryService<P> {
 
 impl<P> Service for AppEntryService<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
 
