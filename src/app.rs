@@ -10,7 +10,7 @@ use actix_service::{
     NewTransform, Service,
 };
 use futures::future::{ok, Either, FutureResult};
-use futures::{try_ready, Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use crate::helpers::{
     BoxedHttpNewService, BoxedHttpService, DefaultNewService, HttpDefaultNewService,
@@ -639,47 +639,10 @@ impl<P> NewService for AppEntry<P> {
     type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
-    type Service = AppEntryService<P>;
-    type Future = AppEntryFactory<P>;
+    type Service = AppService<P>;
+    type Future = CreateAppService<P>;
 
     fn new_service(&self) -> Self::Future {
-        AppEntryFactory {
-            fut: self.factory.borrow_mut().as_mut().unwrap().new_service(),
-        }
-    }
-}
-
-#[doc(hidden)]
-pub struct AppEntryService<P> {
-    app: AppService<P>,
-}
-
-impl<P> Service for AppEntryService<P> {
-    type Request = ServiceRequest<P>;
-    type Response = ServiceResponse;
-    type Error = ();
-    type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.app.poll_ready()
-    }
-
-    fn call(&mut self, req: ServiceRequest<P>) -> Self::Future {
-        self.app.call(req)
-    }
-}
-
-#[doc(hidden)]
-pub struct AppEntryFactory<P> {
-    fut: CreateAppService<P>,
-}
-
-impl<P> Future for AppEntryFactory<P> {
-    type Item = AppEntryService<P>;
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let app = try_ready!(self.fut.poll());
-        Ok(Async::Ready(AppEntryService { app }))
+        self.factory.borrow_mut().as_mut().unwrap().new_service()
     }
 }

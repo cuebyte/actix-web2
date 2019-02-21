@@ -6,7 +6,7 @@ use actix_service::{
     ApplyNewService, IntoNewService, IntoNewTransform, NewService, NewTransform, Service,
 };
 use futures::future::{ok, Either, FutureResult};
-use futures::{try_ready, Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use crate::handler::{AsyncFactory, Factory, FromRequest};
 use crate::helpers::{DefaultNewService, HttpDefaultNewService, HttpDefaultService};
@@ -467,47 +467,10 @@ impl<P> NewService for ResourceEndpoint<P> {
     type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
-    type Service = ResourceEndpointService<P>;
-    type Future = ResourceEndpointFactory<P>;
+    type Service = ResourceService<P>;
+    type Future = CreateResourceService<P>;
 
     fn new_service(&self) -> Self::Future {
-        ResourceEndpointFactory {
-            fut: self.factory.borrow_mut().as_mut().unwrap().new_service(),
-        }
-    }
-}
-
-#[doc(hidden)]
-pub struct ResourceEndpointFactory<P> {
-    fut: CreateResourceService<P>,
-}
-
-impl<P> Future for ResourceEndpointFactory<P> {
-    type Item = ResourceEndpointService<P>;
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let srv = try_ready!(self.fut.poll());
-        Ok(Async::Ready(ResourceEndpointService { srv }))
-    }
-}
-
-#[doc(hidden)]
-pub struct ResourceEndpointService<P> {
-    srv: ResourceService<P>,
-}
-
-impl<P> Service for ResourceEndpointService<P> {
-    type Request = ServiceRequest<P>;
-    type Response = ServiceResponse;
-    type Error = ();
-    type Future = <ResourceService<P> as Service>::Future;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.srv.poll_ready()
-    }
-
-    fn call(&mut self, req: ServiceRequest<P>) -> Self::Future {
-        self.srv.call(req)
+        self.factory.borrow_mut().as_mut().unwrap().new_service()
     }
 }
