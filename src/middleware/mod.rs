@@ -4,6 +4,8 @@ use actix_service::{NewTransform, Service, Transform};
 use futures::future::{ok, FutureResult};
 
 mod defaultheaders;
+mod errhandlers;
+mod logger;
 pub use self::defaultheaders::DefaultHeaders;
 
 /// Helper for middleware service factory
