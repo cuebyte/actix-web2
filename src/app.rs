@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use actix_http::body::{Body, MessageBody};
 use actix_http::{Extensions, PayloadStream, Request, Response};
 use actix_router::{Path, ResourceDef, ResourceInfo, Router, Url};
 use actix_service::{
@@ -9,16 +10,16 @@ use actix_service::{
     NewTransform, Service,
 };
 use futures::future::{ok, Either, FutureResult};
-use futures::{try_ready, Async, Future, IntoFuture, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 
 use crate::helpers::{
     BoxedHttpNewService, BoxedHttpService, DefaultNewService, HttpDefaultNewService,
 };
 use crate::resource::Resource;
-use crate::service::ServiceRequest;
+use crate::service::{ServiceRequest, ServiceResponse};
 use crate::state::{State, StateFactory, StateFactoryResult};
 
-type BoxedResponse = Box<Future<Item = Response, Error = ()>>;
+type BoxedResponse = Box<Future<Item = ServiceResponse, Error = ()>>;
 
 pub trait HttpServiceFactory<Request> {
     type Factory: NewService<Request = Request>;
@@ -29,22 +30,27 @@ pub trait HttpServiceFactory<Request> {
 }
 
 /// Application builder
-pub struct App<P, T> {
+pub struct App<P, B, T> {
     services: Vec<(
         ResourceDef,
-        BoxedHttpNewService<ServiceRequest<P>, Response>,
+        BoxedHttpNewService<ServiceRequest<P>, ServiceResponse>,
     )>,
-    default: Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>,
-    defaults:
-        Vec<Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<P>, Response>>>>>>,
+    default: Option<Rc<HttpDefaultNewService<ServiceRequest<P>, ServiceResponse>>>,
+    defaults: Vec<
+        Rc<
+            RefCell<
+                Option<Rc<HttpDefaultNewService<ServiceRequest<P>, ServiceResponse>>>,
+            >,
+        >,
+    >,
     endpoint: T,
     factory_ref: Rc<RefCell<Option<AppFactory<P>>>>,
     extensions: Extensions,
     state: Vec<Box<StateFactory>>,
-    _t: PhantomData<P>,
+    _t: PhantomData<(P, B)>,
 }
 
-impl App<PayloadStream, AppEntry<PayloadStream>> {
+impl App<PayloadStream, Body, AppEntry<PayloadStream>> {
     /// Create application with empty state. Application can
     /// be configured with a builder-like pattern.
     pub fn new() -> Self {
@@ -52,13 +58,13 @@ impl App<PayloadStream, AppEntry<PayloadStream>> {
     }
 }
 
-impl Default for App<PayloadStream, AppEntry<PayloadStream>> {
+impl Default for App<PayloadStream, Body, AppEntry<PayloadStream>> {
     fn default() -> Self {
         App::new()
     }
 }
 
-impl App<PayloadStream, AppEntry<PayloadStream>> {
+impl App<PayloadStream, Body, AppEntry<PayloadStream>> {
     /// Create application with specified state. Application can be
     /// configured with a builder-like pattern.
     ///
@@ -120,11 +126,13 @@ impl App<PayloadStream, AppEntry<PayloadStream>> {
 //     _t: PhantomData<P>,
 // }
 
-impl<P: 'static, T> App<P, T>
+impl<P, B, T> App<P, B, T>
 where
+    P: 'static,
+    B: MessageBody,
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response,
+        Response = ServiceResponse<B>,
         Error = (),
         InitError = (),
     >,
@@ -165,7 +173,7 @@ where
         F: FnOnce(Resource<P>) -> Resource<P, U>,
         U: NewService<
                 Request = ServiceRequest<P>,
-                Response = Response,
+                Response = ServiceResponse,
                 Error = (),
                 InitError = (),
             > + 'static,
@@ -188,8 +196,11 @@ where
     where
         F: FnOnce(Resource<P>) -> R,
         R: IntoNewService<U>,
-        U: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>
-            + 'static,
+        U: NewService<
+                Request = ServiceRequest<P>,
+                Response = ServiceResponse,
+                Error = (),
+            > + 'static,
     {
         // create and configure default resource
         self.default = Some(Rc::new(Box::new(DefaultNewService::new(
@@ -204,8 +215,11 @@ where
     where
         R: Into<ResourceDef>,
         F: IntoNewService<U>,
-        U: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>
-            + 'static,
+        U: NewService<
+                Request = ServiceRequest<P>,
+                Response = ServiceResponse,
+                Error = (),
+            > + 'static,
     {
         self.services.push((
             rdef.into(),
@@ -215,14 +229,15 @@ where
     }
 
     /// Register a middleware.
-    pub fn middleware<M, F>(
+    pub fn middleware<M, B1, F>(
         self,
         mw: F,
     ) -> App<
         P,
+        B1,
         impl NewService<
             Request = ServiceRequest<P>,
-            Response = Response,
+            Response = ServiceResponse<B1>,
             Error = (),
             InitError = (),
         >,
@@ -231,10 +246,11 @@ where
         M: NewTransform<
             T::Service,
             Request = ServiceRequest<P>,
-            Response = Response,
+            Response = ServiceResponse<B1>,
             Error = (),
             InitError = (),
         >,
+        B1: MessageBody,
         F: IntoNewTransform<M, T::Service>,
     {
         let endpoint = ApplyNewService::new(mw, self.endpoint);
@@ -287,12 +303,12 @@ where
     }
 }
 
-impl<T, P: 'static> IntoNewService<AndThenNewService<AppStateFactory<P>, T>>
-    for App<P, T>
+impl<T, P: 'static, B: MessageBody>
+    IntoNewService<AndThenNewService<AppStateFactory<P>, T>> for App<P, B, T>
 where
     T: NewService<
         Request = ServiceRequest<P>,
-        Response = Response,
+        Response = ServiceResponse<B>,
         Error = (),
         InitError = (),
     >,
@@ -366,21 +382,17 @@ impl<P> Future for AppStateFactoryResult<P> {
                     idx += 1;
                 }
             }
-            if self.state.is_empty() {
-                Ok(Async::Ready(AppStateService {
-                    extensions: self.extensions.borrow().clone(),
-                    _t: PhantomData,
-                }))
-            } else {
-                Ok(Async::NotReady)
+            if !self.state.is_empty() {
+                return Ok(Async::NotReady);
             }
         } else {
             log::warn!("Multiple copies of app extensions exists");
-            Ok(Async::Ready(AppStateService {
-                extensions: self.extensions.borrow().clone(),
-                _t: PhantomData,
-            }))
         }
+
+        Ok(Async::Ready(AppStateService {
+            extensions: self.extensions.borrow().clone(),
+            _t: PhantomData,
+        }))
     }
 }
 
@@ -413,14 +425,14 @@ pub struct AppFactory<P> {
     services: Rc<
         Vec<(
             ResourceDef,
-            BoxedHttpNewService<ServiceRequest<P>, Response>,
+            BoxedHttpNewService<ServiceRequest<P>, ServiceResponse>,
         )>,
     >,
 }
 
 impl<P> NewService for AppFactory<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
     type Service = AppService<P>;
@@ -443,7 +455,7 @@ impl<P> NewService for AppFactory<P> {
 }
 
 type HttpServiceFut<P> =
-    Box<Future<Item = BoxedHttpService<ServiceRequest<P>, Response>, Error = ()>>;
+    Box<Future<Item = BoxedHttpService<ServiceRequest<P>, ServiceResponse>, Error = ()>>;
 
 /// Create app service
 #[doc(hidden)]
@@ -453,7 +465,10 @@ pub struct CreateAppService<P> {
 
 enum CreateAppServiceItem<P> {
     Future(Option<ResourceDef>, HttpServiceFut<P>),
-    Service(ResourceDef, BoxedHttpService<ServiceRequest<P>, Response>),
+    Service(
+        ResourceDef,
+        BoxedHttpService<ServiceRequest<P>, ServiceResponse>,
+    ),
 }
 
 impl<P> Future for CreateAppService<P> {
@@ -507,13 +522,13 @@ impl<P> Future for CreateAppService<P> {
 }
 
 pub struct AppService<P> {
-    router: Router<BoxedHttpService<ServiceRequest<P>, Response>>,
+    router: Router<BoxedHttpService<ServiceRequest<P>, ServiceResponse>>,
     ready: Option<(ServiceRequest<P>, ResourceInfo)>,
 }
 
 impl<P> Service for AppService<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
 
@@ -529,15 +544,16 @@ impl<P> Service for AppService<P> {
         if let Some((srv, _info)) = self.router.recognize_mut(req.match_info_mut()) {
             Either::A(srv.call(req))
         } else {
-            Either::B(ok(Response::NotFound().finish()))
+            let req = req.into_request();
+            Either::B(ok(ServiceResponse::new(req, Response::NotFound().finish())))
         }
     }
 }
 
-pub struct AppServiceResponse(Box<Future<Item = Response, Error = ()>>);
+pub struct AppServiceResponse(Box<Future<Item = ServiceResponse, Error = ()>>);
 
 impl Future for AppServiceResponse {
-    type Item = Response;
+    type Item = ServiceResponse;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -549,7 +565,7 @@ struct HttpNewService<P: 'static, T: NewService<Request = ServiceRequest<P>>>(T)
 
 impl<P, T> HttpNewService<P, T>
 where
-    T: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>,
+    T: NewService<Request = ServiceRequest<P>, Response = ServiceResponse, Error = ()>,
     T::Future: 'static,
     <T::Service as Service>::Future: 'static,
 {
@@ -560,13 +576,13 @@ where
 
 impl<P: 'static, T> NewService for HttpNewService<P, T>
 where
-    T: NewService<Request = ServiceRequest<P>, Response = Response, Error = ()>,
+    T: NewService<Request = ServiceRequest<P>, Response = ServiceResponse, Error = ()>,
     T::Future: 'static,
     T::Service: 'static,
     <T::Service as Service>::Future: 'static,
 {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
     type Service = BoxedHttpService<ServiceRequest<P>, Self::Response>;
@@ -591,10 +607,10 @@ struct HttpServiceWrapper<T: Service, P> {
 impl<T, P> Service for HttpServiceWrapper<T, P>
 where
     T::Future: 'static,
-    T: Service<Request = ServiceRequest<P>, Response = Response, Error = ()>,
+    T: Service<Request = ServiceRequest<P>, Response = ServiceResponse, Error = ()>,
 {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type Future = BoxedResponse;
 
@@ -620,50 +636,13 @@ impl<P> AppEntry<P> {
 
 impl<P> NewService for AppEntry<P> {
     type Request = ServiceRequest<P>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = ();
     type InitError = ();
-    type Service = AppEntryService<P>;
-    type Future = AppEntryFactory<P>;
+    type Service = AppService<P>;
+    type Future = CreateAppService<P>;
 
     fn new_service(&self) -> Self::Future {
-        AppEntryFactory {
-            fut: self.factory.borrow_mut().as_mut().unwrap().new_service(),
-        }
-    }
-}
-
-#[doc(hidden)]
-pub struct AppEntryService<P> {
-    app: AppService<P>,
-}
-
-impl<P> Service for AppEntryService<P> {
-    type Request = ServiceRequest<P>;
-    type Response = Response;
-    type Error = ();
-    type Future = Either<BoxedResponse, FutureResult<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        self.app.poll_ready()
-    }
-
-    fn call(&mut self, req: ServiceRequest<P>) -> Self::Future {
-        self.app.call(req)
-    }
-}
-
-#[doc(hidden)]
-pub struct AppEntryFactory<P> {
-    fut: CreateAppService<P>,
-}
-
-impl<P> Future for AppEntryFactory<P> {
-    type Item = AppEntryService<P>;
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let app = try_ready!(self.fut.poll());
-        Ok(Async::Ready(AppEntryService { app }))
+        self.factory.borrow_mut().as_mut().unwrap().new_service()
     }
 }

@@ -3,12 +3,11 @@ use std::rc::Rc;
 
 use actix_http::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use actix_http::http::{HeaderMap, HttpTryFrom};
-use actix_http::Response;
 use actix_service::{IntoNewTransform, Service, Transform};
 use futures::{Async, Future, Poll};
 
 use crate::middleware::MiddlewareFactory;
-use crate::service::ServiceRequest;
+use crate::service::{ServiceRequest, ServiceResponse};
 
 /// `Middleware` for setting default response headers.
 ///
@@ -87,10 +86,10 @@ impl DefaultHeaders {
     }
 }
 
-impl<S, State> IntoNewTransform<MiddlewareFactory<DefaultHeaders, S>, S>
+impl<S, State, B> IntoNewTransform<MiddlewareFactory<DefaultHeaders, S>, S>
     for DefaultHeaders
 where
-    S: Service<Request = ServiceRequest<State>, Response = Response>,
+    S: Service<Request = ServiceRequest<State>, Response = ServiceResponse<B>>,
     S::Future: 'static,
 {
     fn into_new_transform(self) -> MiddlewareFactory<DefaultHeaders, S> {
@@ -98,13 +97,13 @@ where
     }
 }
 
-impl<S, State> Transform<S> for DefaultHeaders
+impl<S, State, B> Transform<S> for DefaultHeaders
 where
-    S: Service<Request = ServiceRequest<State>, Response = Response>,
+    S: Service<Request = ServiceRequest<State>, Response = ServiceResponse<B>>,
     S::Future: 'static,
 {
     type Request = ServiceRequest<State>;
-    type Response = Response;
+    type Response = ServiceResponse<B>;
     type Error = S::Error;
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
@@ -138,8 +137,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::header::CONTENT_TYPE;
-    use test::TestRequest;
+    use actix_http::http::header::CONTENT_TYPE;
+    use actix_http::test::TestRequest;
 
     #[test]
     fn test_default_headers() {
@@ -147,14 +146,14 @@ mod tests {
 
         let req = TestRequest::default().finish();
 
-        let resp = HttpResponse::Ok().finish();
+        let resp = Response::Ok().finish();
         let resp = match mw.response(&req, resp) {
             Ok(Response::Done(resp)) => resp,
             _ => panic!(),
         };
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0001");
 
-        let resp = HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish();
+        let resp = Response::Ok().header(CONTENT_TYPE, "0002").finish();
         let resp = match mw.response(&req, resp) {
             Ok(Response::Done(resp)) => resp,
             _ => panic!(),

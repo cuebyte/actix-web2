@@ -2,12 +2,13 @@ use std::marker::PhantomData;
 
 use actix_http::{Error, Response};
 use actix_service::{NewService, Service};
-use futures::future::{ok, Either, FutureResult};
+use actix_utils::Never;
+use futures::future::{ok, FutureResult};
 use futures::{try_ready, Async, Future, IntoFuture, Poll};
 
 use crate::request::HttpRequest;
-use crate::responder::{Responder, ResponseFuture};
-use crate::service::ServiceRequest;
+use crate::responder::Responder;
+use crate::service::{ServiceRequest, ServiceResponse};
 
 /// Trait implemented by types that can be extracted from request.
 ///
@@ -69,8 +70,8 @@ where
     R: Responder + 'static,
 {
     type Request = (T, HttpRequest);
-    type Response = Response;
-    type Error = Error;
+    type Response = ServiceResponse;
+    type Error = Never;
     type InitError = ();
     type Service = HandleService<F, T, R>;
     type Future = FutureResult<Self::Service, ()>;
@@ -99,16 +100,51 @@ where
     R: Responder + 'static,
 {
     type Request = (T, HttpRequest);
-    type Response = Response;
-    type Error = Error;
-    type Future = ResponseFuture<R::Future>;
+    type Response = ServiceResponse;
+    type Error = Never;
+    type Future = HandleServiceResponse<R::Future>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
 
     fn call(&mut self, (param, req): (T, HttpRequest)) -> Self::Future {
-        ResponseFuture::new(self.hnd.call(param).respond_to(&req))
+        let fut = self.hnd.call(param).respond_to(&req);
+        HandleServiceResponse {
+            fut,
+            req: Some(req),
+        }
+    }
+}
+
+pub struct HandleServiceResponse<T> {
+    fut: T,
+    req: Option<HttpRequest>,
+}
+
+impl<T> Future for HandleServiceResponse<T>
+where
+    T: Future<Item = Response>,
+    T::Error: Into<Error>,
+{
+    type Item = ServiceResponse;
+    type Error = Never;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.fut.poll() {
+            Ok(Async::Ready(res)) => Ok(Async::Ready(ServiceResponse::new(
+                self.req.take().unwrap(),
+                res,
+            ))),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => {
+                let res: Response = e.into().into();
+                Ok(Async::Ready(ServiceResponse::new(
+                    self.req.take().unwrap(),
+                    res,
+                )))
+            }
+        }
     }
 }
 
@@ -167,9 +203,9 @@ where
     R::Item: Into<Response>,
     R::Error: Into<Error>,
 {
-    type Request = Result<(T, HttpRequest), Error>;
-    type Response = Response;
-    type Error = Error;
+    type Request = (T, HttpRequest);
+    type Response = ServiceResponse;
+    type Error = ();
     type InitError = ();
     type Service = AsyncHandleService<F, T, R>;
     type Future = FutureResult<Self::Service, ()>;
@@ -201,33 +237,27 @@ where
     R::Item: Into<Response>,
     R::Error: Into<Error>,
 {
-    type Request = Result<(T, HttpRequest), Error>;
-    type Response = Response;
-    type Error = Error;
-    type Future =
-        Either<AsyncHandleServiceResponse<R::Future>, FutureResult<Response, Error>>;
+    type Request = (T, HttpRequest);
+    type Response = ServiceResponse;
+    type Error = ();
+    type Future = AsyncHandleServiceResponse<R::Future>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
     }
 
-    fn call(&mut self, req: Result<(T, HttpRequest), Error>) -> Self::Future {
-        match req {
-            Ok((param, req)) => Either::A(AsyncHandleServiceResponse::new(
-                self.hnd.call(param).into_future(),
-            )),
-            Err(e) => Either::B(ok(Response::from(e).into_body())),
+    fn call(&mut self, (param, req): (T, HttpRequest)) -> Self::Future {
+        AsyncHandleServiceResponse {
+            fut: self.hnd.call(param).into_future(),
+            req: Some(req),
         }
     }
 }
 
 #[doc(hidden)]
-pub struct AsyncHandleServiceResponse<T>(T);
-
-impl<T> AsyncHandleServiceResponse<T> {
-    pub fn new(fut: T) -> Self {
-        AsyncHandleServiceResponse(fut)
-    }
+pub struct AsyncHandleServiceResponse<T> {
+    fut: T,
+    req: Option<HttpRequest>,
 }
 
 impl<T> Future for AsyncHandleServiceResponse<T>
@@ -236,13 +266,24 @@ where
     T::Item: Into<Response>,
     T::Error: Into<Error>,
 {
-    type Item = Response;
-    type Error = Error;
+    type Item = ServiceResponse;
+    type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        Ok(Async::Ready(
-            try_ready!(self.0.poll().map_err(|e| e.into())).into(),
-        ))
+        match self.fut.poll() {
+            Ok(Async::Ready(res)) => Ok(Async::Ready(ServiceResponse::new(
+                self.req.take().unwrap(),
+                res.into(),
+            ))),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => {
+                let res: Response = e.into().into();
+                Ok(Async::Ready(ServiceResponse::new(
+                    self.req.take().unwrap(),
+                    res,
+                )))
+            }
+        }
     }
 }
 
@@ -266,7 +307,7 @@ impl<P, T: FromRequest<P>> Default for Extract<P, T> {
 impl<P, T: FromRequest<P>> NewService for Extract<P, T> {
     type Request = ServiceRequest<P>;
     type Response = (T, HttpRequest);
-    type Error = Error;
+    type Error = (Error, ServiceRequest<P>);
     type InitError = ();
     type Service = ExtractService<P, T>;
     type Future = FutureResult<Self::Service, ()>;
@@ -283,7 +324,7 @@ pub struct ExtractService<P, T: FromRequest<P>> {
 impl<P, T: FromRequest<P>> Service for ExtractService<P, T> {
     type Request = ServiceRequest<P>;
     type Response = (T, HttpRequest);
-    type Error = Error;
+    type Error = (Error, ServiceRequest<P>);
     type Future = ExtractResponse<P, T>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
@@ -305,10 +346,13 @@ pub struct ExtractResponse<P, T: FromRequest<P>> {
 
 impl<P, T: FromRequest<P>> Future for ExtractResponse<P, T> {
     type Item = (T, HttpRequest);
-    type Error = Error;
+    type Error = (Error, ServiceRequest<P>);
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let item = try_ready!(self.fut.poll().map_err(|e| e.into()));
+        let item = try_ready!(self
+            .fut
+            .poll()
+            .map_err(|e| (e.into(), self.req.take().unwrap())));
 
         let req = self.req.take().unwrap();
         let req = req.into_request();

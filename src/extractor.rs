@@ -1001,13 +1001,15 @@ tuple_from_req!(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use actix_http::http::header;
+    use actix_http::test::TestRequest;
     use bytes::Bytes;
     use futures::{Async, Future};
-    use http::header;
     use mime;
-    use resource::Resource;
-    use router::{ResourceDef, Router};
-    use test::TestRequest;
+    use serde::{Deserialize, Serialize};
+
+    use crate::resource::Resource;
+    // use crate::router::{ResourceDef, Router};
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct Info {

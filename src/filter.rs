@@ -233,9 +233,10 @@ impl Filter for HostFilter {
 
 #[cfg(test)]
 mod tests {
+    use actix_http::http::{header, Method};
+    use actix_http::test::TestRequest;
+
     use super::*;
-    use http::{header, Method};
-    use test::TestRequest;
 
     #[test]
     fn test_header() {
