@@ -31,15 +31,14 @@ use actix_http::http::header::{
 };
 use actix_http::http::{ContentEncoding, Method, StatusCode};
 use actix_http::{HttpMessage, Response};
-use actix_router::PathDeserializer;
-use actix_service::{IntoNewService, NewService, Service};
+use actix_service::{NewService, Service};
 use futures::future::{err, ok, FutureResult};
 
 use crate::handler::FromRequest;
 use crate::helpers::HttpDefaultNewService;
 use crate::request::HttpRequest;
 use crate::responder::Responder;
-use crate::service::ServiceRequest;
+use crate::service::{ServiceRequest, ServiceResponse};
 
 // use header;
 // use header::{ContentDisposition, DispositionParam, DispositionType};
@@ -611,7 +610,8 @@ impl Stream for ChunkedReadFile {
     }
 }
 
-type DirectoryRenderer = Fn(&Directory, &HttpRequest) -> Result<Response, io::Error>;
+type DirectoryRenderer =
+    FnOnce(&Directory, &HttpRequest) -> Result<ServiceResponse, io::Error>;
 
 /// A directory; responds with the generated directory listing.
 #[derive(Debug)]
@@ -659,7 +659,10 @@ macro_rules! encode_file_name {
     };
 }
 
-fn directory_listing(dir: &Directory, req: &HttpRequest) -> Result<Response, io::Error> {
+fn directory_listing(
+    dir: &Directory,
+    req: &HttpRequest,
+) -> Result<ServiceResponse, io::Error> {
     let index_of = format!("Index of {}", req.path());
     let mut body = String::new();
     let base = Path::new(req.path());
@@ -704,9 +707,12 @@ fn directory_listing(dir: &Directory, req: &HttpRequest) -> Result<Response, io:
          </ul></body>\n</html>",
         index_of, index_of, body
     );
-    Ok(Response::Ok()
-        .content_type("text/html; charset=utf-8")
-        .body(html))
+    Ok(ServiceResponse {
+        request: req.clone(),
+        response: Response::Ok()
+            .content_type("text/html; charset=utf-8")
+            .body(html),
+    })
 }
 
 /// Static files handling
@@ -729,7 +735,9 @@ pub struct StaticFiles<S, C = DefaultConfig> {
     index: Option<String>,
     show_index: bool,
     cpu_pool: CpuPool,
-    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
+    default: Rc<
+        RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, ServiceResponse>>>>,
+    >,
     renderer: Rc<DirectoryRenderer>,
     _chunk_size: usize,
     _follow_symlinks: bool,
@@ -808,7 +816,8 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
     pub fn files_listing_renderer<F>(mut self, f: F) -> Self
     where
         for<'r, 's> F:
-            Fn(&'r Directory, &'s HttpRequest) -> Result<Response, io::Error> + 'static,
+            FnOnce(&'r Directory, &'s HttpRequest) -> Result<ServiceResponse, io::Error>
+                + 'static,
     {
         self.renderer = Rc::new(f);
         self
@@ -826,7 +835,7 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
 
 impl<S: 'static, C: StaticFileConfig + 'static> NewService for StaticFiles<S, C> {
     type Request = ServiceRequest<S>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = Error;
     type Service = StaticFilesService<S, C>;
     type InitError = Error;
@@ -852,7 +861,9 @@ pub struct StaticFilesService<S, C = DefaultConfig> {
     index: Option<String>,
     show_index: bool,
     cpu_pool: CpuPool,
-    default: Rc<RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, Response>>>>>,
+    default: Rc<
+        RefCell<Option<Rc<HttpDefaultNewService<ServiceRequest<S>, ServiceResponse>>>>,
+    >,
     renderer: Rc<DirectoryRenderer>,
     _chunk_size: usize,
     _follow_symlinks: bool,
@@ -861,9 +872,9 @@ pub struct StaticFilesService<S, C = DefaultConfig> {
 
 impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
     type Request = ServiceRequest<S>;
-    type Response = Response;
+    type Response = ServiceResponse;
     type Error = Error;
-    type Future = FutureResult<Response, Error>;
+    type Future = FutureResult<Self::Response, Self::Error>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         Ok(Async::Ready(()))
@@ -892,7 +903,10 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
                         .respond_to(&req)
                         .poll()
                     {
-                        Ok(Async::Ready(item)) => ok(item),
+                        Ok(Async::Ready(item)) => ok(ServiceResponse {
+                            request: req.clone(),
+                            response: item,
+                        }),
                         Ok(Async::NotReady) => unreachable!(),
                         Err(e) => err(Error::from(e)),
                     },
@@ -914,7 +928,10 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
                     .respond_to(&req)
                     .poll()
                 {
-                    Ok(Async::Ready(item)) => ok(item),
+                    Ok(Async::Ready(item)) => ok(ServiceResponse {
+                        request: req.clone(),
+                        response: item,
+                    }),
                     Ok(Async::NotReady) => unreachable!(),
                     Err(e) => err(Error::from(e)),
                 },
@@ -1113,8 +1130,8 @@ impl HttpRange {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::time::Duration;
     use std::ops::Add;
+    use std::time::Duration;
 
     use super::*;
     use application::App;
@@ -1139,17 +1156,14 @@ mod tests {
         let mut file = NamedFile::open("Cargo.toml")
             .unwrap()
             .set_cpu_pool(CpuPool::new(1));
-        let since = header::HttpDate::from(
-            SystemTime::now().add(Duration::from_secs(60)));
+        let since =
+            header::HttpDate::from(SystemTime::now().add(Duration::from_secs(60)));
 
         let req = TestRequest::default()
             .header(header::IF_MODIFIED_SINCE, since)
             .finish();
         let resp = file.respond_to(&req).unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::NOT_MODIFIED
-        );
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
     }
 
     #[test]
@@ -1157,18 +1171,15 @@ mod tests {
         let mut file = NamedFile::open("Cargo.toml")
             .unwrap()
             .set_cpu_pool(CpuPool::new(1));
-        let since = header::HttpDate::from(
-            SystemTime::now().add(Duration::from_secs(60)));
+        let since =
+            header::HttpDate::from(SystemTime::now().add(Duration::from_secs(60)));
 
         let req = TestRequest::default()
             .header(header::IF_NONE_MATCH, "miss_etag")
             .header(header::IF_MODIFIED_SINCE, since)
             .finish();
         let resp = file.respond_to(&req).unwrap();
-        assert_ne!(
-            resp.status(),
-            StatusCode::NOT_MODIFIED
-        );
+        assert_ne!(resp.status(), StatusCode::NOT_MODIFIED);
     }
 
     #[test]
@@ -1554,10 +1565,8 @@ mod tests {
     #[test]
     fn test_static_files_with_spaces() {
         let mut srv = test::TestServer::with_factory(|| {
-            App::new().handler(
-                "/",
-                StaticFiles::new(".").unwrap().index_file("Cargo.toml"),
-            )
+            App::new()
+                .handler("/", StaticFiles::new(".").unwrap().index_file("Cargo.toml"))
         });
         let request = srv
             .get()
@@ -1692,11 +1701,15 @@ mod tests {
         let resp = resp.as_msg();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).expect("content type"),
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .expect("content type"),
             "application/octet-stream"
         );
         assert_eq!(
-            resp.headers().get(header::CONTENT_DISPOSITION).expect("content disposition"),
+            resp.headers()
+                .get(header::CONTENT_DISPOSITION)
+                .expect("content disposition"),
             "attachment; filename=\"test.binary\""
         );
 
