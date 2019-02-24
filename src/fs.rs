@@ -611,7 +611,7 @@ impl Stream for ChunkedReadFile {
 }
 
 type DirectoryRenderer =
-    FnOnce(&Directory, &HttpRequest) -> Result<ServiceResponse, io::Error>;
+    Fn(&Directory, &HttpRequest) -> Result<ServiceResponse, io::Error>;
 
 /// A directory; responds with the generated directory listing.
 #[derive(Debug)]
@@ -707,12 +707,12 @@ fn directory_listing(
          </ul></body>\n</html>",
         index_of, index_of, body
     );
-    Ok(ServiceResponse {
-        request: req.clone(),
-        response: Response::Ok()
+    Ok(ServiceResponse::new(
+        req.clone(),
+        Response::Ok()
             .content_type("text/html; charset=utf-8")
             .body(html),
-    })
+    ))
 }
 
 /// Static files handling
@@ -816,7 +816,7 @@ impl<S: 'static, C: StaticFileConfig> StaticFiles<S, C> {
     pub fn files_listing_renderer<F>(mut self, f: F) -> Self
     where
         for<'r, 's> F:
-            FnOnce(&'r Directory, &'s HttpRequest) -> Result<ServiceResponse, io::Error>
+            Fn(&'r Directory, &'s HttpRequest) -> Result<ServiceResponse, io::Error>
                 + 'static,
     {
         self.renderer = Rc::new(f);
@@ -903,10 +903,9 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
                         .respond_to(&req)
                         .poll()
                     {
-                        Ok(Async::Ready(item)) => ok(ServiceResponse {
-                            request: req.clone(),
-                            response: item,
-                        }),
+                        Ok(Async::Ready(item)) => {
+                            ok(ServiceResponse::new(req.clone(), item))
+                        }
                         Ok(Async::NotReady) => unreachable!(),
                         Err(e) => err(Error::from(e)),
                     },
@@ -914,7 +913,8 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
                 }
             } else if self.show_index {
                 let dir = Directory::new(self.directory.clone(), path);
-                match (*self.renderer)(&dir, &req) {
+                let x = (self.renderer)(&dir, &req);
+                match x {
                     Ok(resp) => ok(resp),
                     Err(e) => err(Error::from(e)),
                 }
@@ -928,10 +928,9 @@ impl<S: 'static, C: StaticFileConfig> Service for StaticFilesService<S, C> {
                     .respond_to(&req)
                     .poll()
                 {
-                    Ok(Async::Ready(item)) => ok(ServiceResponse {
-                        request: req.clone(),
-                        response: item,
-                    }),
+                    Ok(Async::Ready(item)) => {
+                            ok(ServiceResponse::new(req.clone(), item))
+                        }
                     Ok(Async::NotReady) => unreachable!(),
                     Err(e) => err(Error::from(e)),
                 },
