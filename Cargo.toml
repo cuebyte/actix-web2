@@ -54,6 +54,7 @@ serde = "1.0"
 serde_json = "1.0"
 encoding = "0.2"
 serde_urlencoded = "^0.5.3"
+hashbrown = "0.1"
 
 # compression
 brotli2 = { version="^0.3.2", optional = true }
