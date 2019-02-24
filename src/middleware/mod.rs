@@ -9,8 +9,6 @@ mod compress;
 pub use self::compress::Compress;
 
 mod defaultheaders;
-mod errhandlers;
-mod logger;
 pub use self::defaultheaders::DefaultHeaders;
 
 /// Helper for middleware service factory
